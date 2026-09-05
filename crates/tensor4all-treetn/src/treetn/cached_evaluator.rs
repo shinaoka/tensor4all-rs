@@ -10955,7 +10955,7 @@ mod tests {
                 start,
                 MAX_SWEEPS,
                 f64::INFINITY,
-                |points: &[Vec<usize>]| -> Result<Vec<f64>> {
+                |_scan_site: Option<usize>, points: &[Vec<usize>]| -> Result<Vec<f64>> {
                     let mut values = vec![0usize; N_SITES * points.len()];
                     for (p, point) in points.iter().enumerate() {
                         for (site, &v) in point.iter().enumerate() {
@@ -11002,7 +11002,7 @@ mod tests {
                 start,
                 MAX_SWEEPS,
                 f64::INFINITY,
-                |points: &[Vec<usize>]| -> Result<Vec<f64>> {
+                |_scan_site: Option<usize>, points: &[Vec<usize>]| -> Result<Vec<f64>> {
                     let mut values = vec![0usize; N_SITES * points.len()];
                     for (p, point) in points.iter().enumerate() {
                         for (site, &v) in point.iter().enumerate() {
@@ -11098,7 +11098,7 @@ mod tests {
                 start,
                 MAX_SWEEPS,
                 f64::INFINITY,
-                |points: &[Vec<usize>]| -> Result<Vec<f64>> {
+                |_scan_site: Option<usize>, points: &[Vec<usize>]| -> Result<Vec<f64>> {
                     let mut values = vec![0usize; N_SITES * points.len()];
                     for (p, point) in points.iter().enumerate() {
                         for (site, &v) in point.iter().enumerate() {
@@ -11463,7 +11463,7 @@ mod tests {
                     start,
                     MAX_SWEEPS,
                     f64::INFINITY,
-                    |points: &[Vec<usize>]| -> Result<Vec<f64>> {
+                    |_scan_site: Option<usize>, points: &[Vec<usize>]| -> Result<Vec<f64>> {
                         let mut values = vec![0usize; n_sites * points.len()];
                         for (p, point) in points.iter().enumerate() {
                             for (site, &v) in point.iter().enumerate() {
@@ -11525,5 +11525,173 @@ mod tests {
         );
         assert!(chain_elapsed.as_nanos() > 0);
         assert!(comb_elapsed.as_nanos() > 0);
+    }
+
+    /// Where a hinted two-point Guard evaluation spends its time on a chain
+    /// and on a branched tree of the same site count (tensor4all-rs #727).
+    ///
+    /// The Guard walks one site at a time and hints the varying site as the
+    /// centre, so every call is two points that differ in one coordinate. On a
+    /// 13-site chain that call costs about 20 us; on a 13-site spider it costs
+    /// about 390 us, and the spider's cost does not move when its bonds shrink
+    /// from `8,8,8,8` to `2,2,2,2` -- so the gap is not arithmetic. This
+    /// attributes it. Run with `--ignored --nocapture`.
+    #[test]
+    #[ignore]
+    fn diagnostic_hinted_walk_cost_on_a_chain_versus_a_branched_tree() {
+        use std::sync::atomic::Ordering;
+        use std::time::Instant;
+
+        const N_SITES: usize = 13;
+        const LOCAL_DIM: usize = 2;
+        const SWEEPS: usize = 5;
+        const ARM_LENGTH: usize = 3;
+
+        fn chain(bond_dim: usize) -> (TreeTN<IdxTensor, usize>, Vec<DynIndex>) {
+            let physical = (0..N_SITES)
+                .map(|_| DynIndex::new_dyn(LOCAL_DIM))
+                .collect::<Vec<_>>();
+            let bonds = (0..N_SITES - 1)
+                .map(|_| DynIndex::new_dyn(bond_dim))
+                .collect::<Vec<_>>();
+            let mut tensors = Vec::with_capacity(N_SITES);
+            for site in 0..N_SITES {
+                let mut indices = vec![physical[site].clone()];
+                if site > 0 {
+                    indices.push(bonds[site - 1].clone());
+                }
+                if site + 1 < N_SITES {
+                    indices.push(bonds[site].clone());
+                }
+                let len: usize = indices.iter().map(IndexLike::dim).product();
+                tensors.push(
+                    IdxTensor::from_dense(
+                        indices,
+                        (0..len)
+                            .map(|flat| 1.0 + (flat % 7) as f64)
+                            .collect::<Vec<f64>>(),
+                    )
+                    .unwrap(),
+                );
+            }
+            (
+                TreeTN::from_tensors(tensors, (0..N_SITES).collect()).unwrap(),
+                physical,
+            )
+        }
+
+        fn spider(bond_dim: usize) -> (TreeTN<IdxTensor, usize>, Vec<DynIndex>) {
+            let arms = 4;
+            assert_eq!(arms * ARM_LENGTH + 1, N_SITES);
+            let physical = (0..N_SITES)
+                .map(|_| DynIndex::new_dyn(LOCAL_DIM))
+                .collect::<Vec<_>>();
+            let hub_bonds = (0..arms)
+                .map(|_| DynIndex::new_dyn(bond_dim))
+                .collect::<Vec<_>>();
+            let arm_bonds = (0..arms)
+                .map(|_| {
+                    (1..ARM_LENGTH)
+                        .map(|_| DynIndex::new_dyn(bond_dim))
+                        .collect::<Vec<_>>()
+                })
+                .collect::<Vec<_>>();
+            let dense = |indices: Vec<DynIndex>| {
+                let len: usize = indices.iter().map(IndexLike::dim).product();
+                IdxTensor::from_dense(
+                    indices,
+                    (0..len)
+                        .map(|flat| 1.0 + (flat % 7) as f64)
+                        .collect::<Vec<f64>>(),
+                )
+                .unwrap()
+            };
+            let mut hub_indices = vec![physical[0].clone()];
+            hub_indices.extend(hub_bonds.iter().cloned());
+            let mut tensors = vec![dense(hub_indices)];
+            for arm in 0..arms {
+                for position in 0..ARM_LENGTH {
+                    let node = 1 + arm * ARM_LENGTH + position;
+                    let mut indices = vec![physical[node].clone()];
+                    if position == 0 {
+                        indices.push(hub_bonds[arm].clone());
+                    } else {
+                        indices.push(arm_bonds[arm][position - 1].clone());
+                    }
+                    if position + 1 < ARM_LENGTH {
+                        indices.push(arm_bonds[arm][position].clone());
+                    }
+                    tensors.push(dense(indices));
+                }
+            }
+            (
+                TreeTN::from_tensors(tensors, (0..N_SITES).collect()).unwrap(),
+                physical,
+            )
+        }
+
+        for (name, (tree, physical)) in [
+            ("chain_bond8", chain(8)),
+            ("spider_bond2", spider(2)),
+            ("spider_bond8", spider(8)),
+        ] {
+            let mut evaluator =
+                TreeTNCachedEvaluator::new(&tree, &physical, CachedEvaluatorOptions::default())
+                    .unwrap();
+            let warm = vec![0usize; N_SITES];
+            evaluator
+                .evaluate_batched_typed::<f64>(
+                    ColMajorArrayRef::new(&warm, &[N_SITES, 1]).unwrap(),
+                    EvaluationHint::default(),
+                )
+                .unwrap();
+
+            phase_timing::reset_all();
+            let mut calls = 0usize;
+            let started = Instant::now();
+            for sweep in 0..SWEEPS {
+                for site in 0..N_SITES {
+                    let mut values = vec![0usize; N_SITES * LOCAL_DIM];
+                    for point in 0..LOCAL_DIM {
+                        for other in 0..N_SITES {
+                            values[other + N_SITES * point] = if other == site {
+                                point
+                            } else {
+                                (other + sweep) % LOCAL_DIM
+                            };
+                        }
+                    }
+                    let batch = ColMajorArrayRef::new(&values, &[N_SITES, LOCAL_DIM]).unwrap();
+                    std::hint::black_box(
+                        evaluator
+                            .evaluate_batched_typed::<f64>(batch, EvaluationHint::around(site))
+                            .unwrap(),
+                    );
+                    calls += 1;
+                }
+            }
+            let total_ns = started.elapsed().as_nanos() as u64;
+            let per_call = |counter: u64| counter as f64 / calls as f64 / 1.0e3;
+            let stats = evaluator.stats_for_test();
+            eprintln!(
+                "hinted walk {name}: total={:.1}us/call over {calls} calls | environment={:.1}us {{capability={:.1}, assignments={:.1}, message_loop={:.1}, component_assembly={:.1}}}, centre={:.1}us, key_lookup={:.1}us, reconstruct={:.1}us, contract={:.1}us, insert={:.1}us, plan_build={:.1}us, layout_build={:.1}us, plans={}, cache hits/misses={}/{}",
+                per_call(total_ns),
+                per_call(phase_timing::BUILD_ENV_NS.load(Ordering::Relaxed)),
+                per_call(phase_timing::RAW_CAPABILITY_NS.load(Ordering::Relaxed)),
+                per_call(phase_timing::ASSIGNMENT_BATCH_NS.load(Ordering::Relaxed)),
+                per_call(phase_timing::MESSAGE_LOOP_NS.load(Ordering::Relaxed)),
+                per_call(phase_timing::COMPONENT_ASSEMBLY_NS.load(Ordering::Relaxed)),
+                per_call(phase_timing::CENTER_NS.load(Ordering::Relaxed)),
+                per_call(phase_timing::KEY_AND_LOOKUP_NS.load(Ordering::Relaxed)),
+                per_call(phase_timing::RECONSTRUCT_NS.load(Ordering::Relaxed)),
+                per_call(phase_timing::CONTRACT_NS.load(Ordering::Relaxed)),
+                per_call(phase_timing::INSERT_NS.load(Ordering::Relaxed)),
+                per_call(phase_timing::PLAN_BUILD_NS.load(Ordering::Relaxed)),
+                per_call(phase_timing::LAYOUT_BUILD_NS.load(Ordering::Relaxed)),
+                phase_timing::PLAN_COUNT.load(Ordering::Relaxed),
+                stats.message_cache_hits,
+                stats.message_cache_misses,
+            );
+        }
     }
 }

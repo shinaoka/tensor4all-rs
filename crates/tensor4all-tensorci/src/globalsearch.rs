@@ -216,9 +216,11 @@ where
         &init_p,
         max_sweeps,
         early_stop_tol,
-        |points: &[MultiIndex]| {
+        |_scan_site: Option<usize>, points: &[MultiIndex]| {
             // Batch-evaluate the tensor train once per site scan; `f` is
-            // evaluated pointwise (no batch API in this signature).
+            // evaluated pointwise (no batch API in this signature). The scan
+            // site is unused here: this evaluator has no scan-structured fast
+            // path to declare it to.
             let tt_values = tt_cache
                 .evaluate_many(points, None)
                 .map_err(TCIError::SimpleTensorTrain)?;

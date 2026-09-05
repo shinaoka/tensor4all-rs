@@ -4,7 +4,7 @@ use tensor4all_treetn::TreeTN;
 
 use super::{
     find_global_pivots, inject_global_pivots, per_evaluator_message_cache_budget,
-    sole_varying_site, GuardOutputEvaluator, InputEvaluators,
+    GuardOutputEvaluator, InputEvaluators,
 };
 use crate::{
     schedule::{run_directional_pass, PassDirection},
@@ -798,7 +798,7 @@ fn shared_guard_hint_preserves_input_and_output_values() {
     .unwrap();
     let points = vec![vec![0, 0], vec![1, 0]];
     let coordinates = input_evaluators.expand_points(&points).unwrap();
-    let hint = input_evaluators.evaluation_hint(&points);
+    let hint = input_evaluators.hint_for_scan_site(Some(0));
     let input_values = input_evaluators
         .evaluate_expanded::<f64>(&points, &coordinates, hint.clone())
         .unwrap();
@@ -830,15 +830,20 @@ fn guard_cached_evaluator_preserves_all_scalar_kinds() {
     assert_guard_typed_evaluation::<Complex64>();
 }
 
+/// The scan site the walk declares is what selects the centre, and the seed
+/// evaluation declares none.
 #[test]
-fn varying_site_detection_rejects_non_scan_batches() {
-    assert_eq!(
-        sole_varying_site(&[vec![0, 0, 0], vec![0, 1, 0], vec![0, 2, 0]]),
-        Some(1)
-    );
-    assert_eq!(sole_varying_site(&[vec![0, 0], vec![1, 1]]), None);
-    assert_eq!(sole_varying_site(&[vec![0, 0]]), None);
-    assert_eq!(sole_varying_site(&[vec![0, 0], vec![0]]), None);
+fn scan_site_selects_the_hinted_center() {
+    let (input, _, _) = delta_tree();
+    let inputs = vec![input];
+    let state =
+        TreeAciState::<f64, usize>::initialize(&inputs, &TreeAciOptions::default()).unwrap();
+    let evaluators = InputEvaluators::new(state.inputs, &state.problem).unwrap();
+
+    assert_eq!(evaluators.hint_for_scan_site(Some(1)).center, Some(1));
+    assert_eq!(evaluators.hint_for_scan_site(None).center, None);
+    // A site outside the tree cannot be hinted, and must not be invented.
+    assert_eq!(evaluators.hint_for_scan_site(Some(99)).center, None);
 }
 
 /// Padding rejects an over-budget request before allocating any padded core.
@@ -875,4 +880,240 @@ fn padding_refuses_an_over_budget_request() {
         ),
         "unexpected error: {error}"
     );
+}
+
+/// Opt-in cost attribution for the Guard's evaluation shape on the 32-site
+/// high-rank chain (issue #728).
+///
+/// The Guard walks `nsearch_global_pivots` independent floating-zone
+/// trajectories, and each walk step asks for one site's `local_dim` points.
+/// That is 2 points per evaluator call, which is what makes the reported 2,218
+/// calls for 8,844 scalars. The trajectories are independent, so the same
+/// points could be requested in one call per (sweep, site) across all starts
+/// instead -- "option 1" of the issue, which changes only how the search is
+/// executed and not what it searches.
+///
+/// This measures whether that is actually cheaper, using the same points in
+/// both shapes, before any search behaviour is changed. Run with
+/// `--ignored --nocapture`.
+#[test]
+#[ignore]
+fn diagnostic_guard_batch_shape_on_the_high_rank_chain() {
+    use std::time::Instant;
+
+    const N_SITES: usize = 32;
+    const NSEARCH: usize = 5;
+    const SWEEPS: usize = 3;
+
+    for chi in [64, 256] {
+        let guess = crate::state::tests::full_rank_chain_guess(N_SITES, chi);
+        let inputs = vec![guess.clone(), guess.clone()];
+        let options = TreeAciOptions {
+            tolerance: 1.0e-8,
+            max_bond_dim: Some(4096),
+            max_sweeps: 2,
+            min_sweeps: 2,
+            initial_guess: Some(guess),
+            enable_global_guard: false,
+            ..TreeAciOptions::default()
+        };
+        let state = TreeAciState::<f64, usize>::initialize(&inputs, &options).unwrap();
+        let budget =
+            per_evaluator_message_cache_budget(options.message_cache_max_bytes, inputs.len())
+                .unwrap();
+
+        // The trajectories the Guard would walk, materialized up front so both
+        // shapes evaluate exactly the same points in the same order.
+        let mut starts: Vec<Vec<usize>> = Vec::with_capacity(NSEARCH);
+        for start in 0..NSEARCH {
+            starts.push(
+                (0..N_SITES)
+                    .map(|site| (start * 7 + site * 3) % 2)
+                    .collect(),
+            );
+        }
+        let mut steps: Vec<Vec<Vec<usize>>> = Vec::new();
+        for _sweep in 0..SWEEPS {
+            for site in 0..N_SITES {
+                for start in &starts {
+                    let mut points = Vec::with_capacity(2);
+                    for value in 0..2 {
+                        let mut point = start.clone();
+                        point[site] = value;
+                        points.push(point);
+                    }
+                    steps.push(points);
+                }
+            }
+        }
+
+        // Shape A: one call per (start, sweep, site), which is what the walk
+        // does today.
+        let mut per_start =
+            InputEvaluators::new_with_message_cache_max_bytes(state.inputs, &state.problem, budget)
+                .unwrap();
+        per_start.evaluate::<f64>(&starts[..1]).unwrap();
+        let started = Instant::now();
+        let mut per_start_values = Vec::new();
+        for points in &steps {
+            per_start_values.extend(per_start.evaluate::<f64>(points).unwrap());
+        }
+        let per_start_elapsed = started.elapsed();
+
+        // Shape B: one call per (sweep, site) carrying every start's points.
+        // Identical points, identical order, `NSEARCH` times fewer calls.
+        let mut lockstep =
+            InputEvaluators::new_with_message_cache_max_bytes(state.inputs, &state.problem, budget)
+                .unwrap();
+        lockstep.evaluate::<f64>(&starts[..1]).unwrap();
+        let started = Instant::now();
+        let mut lockstep_values = Vec::new();
+        for chunk in steps.chunks(NSEARCH) {
+            let points = chunk.iter().flatten().cloned().collect::<Vec<_>>();
+            lockstep_values.extend(lockstep.evaluate::<f64>(&points).unwrap());
+        }
+        let lockstep_elapsed = started.elapsed();
+
+        assert_eq!(per_start_values.len(), lockstep_values.len());
+        let residual = per_start_values
+            .iter()
+            .zip(&lockstep_values)
+            .fold(0.0f64, |residual, (left, right)| {
+                residual.max((left - right).abs())
+            });
+        let scale = per_start_values
+            .iter()
+            .fold(0.0f64, |scale, value| scale.max(value.abs()));
+        assert!(
+            residual <= 1.0e-12 * scale.max(1.0),
+            "batching changed the values: {residual:.3e}"
+        );
+
+        eprintln!(
+            "guard batch shape chi={chi}: per_start={per_start_elapsed:?} over {} calls of 2 points ({:.1} us/call), lockstep={lockstep_elapsed:?} over {} calls of {} points ({:.1} us/call), speedup={:.2}x",
+            steps.len(),
+            per_start_elapsed.as_secs_f64() * 1.0e6 / steps.len() as f64,
+            steps.len() / NSEARCH,
+            2 * NSEARCH,
+            lockstep_elapsed.as_secs_f64() * 1.0e6 * NSEARCH as f64 / steps.len() as f64,
+            per_start_elapsed.as_secs_f64() / lockstep_elapsed.as_secs_f64(),
+        );
+    }
+}
+
+/// Opt-in comparison of the Guard's per-call evaluation cost on a chain and on
+/// a branched tree of the same walk shape (issues #727 and #728).
+///
+/// The #718 gate found an unequal incident-bond layout costing ~24x more per
+/// evaluated point than an equal one at the same hub bond product. The phase
+/// profile attributes that to the Guard running at all on the unequal layouts
+/// (the equal one is rank-limited and skips it), so what matters is what one
+/// Guard evaluation costs on a branched tree. Run with `--ignored --nocapture`.
+#[test]
+#[ignore]
+fn diagnostic_guard_call_cost_on_a_branched_tree() {
+    use std::time::Instant;
+
+    const NSEARCH: usize = 5;
+    const SWEEPS: usize = 3;
+    const ARM_LENGTH: usize = 3;
+    const ARM_CHI: usize = 4;
+
+    let cases: [(&str, Vec<usize>); 5] = [
+        ("chain_13_chi8", vec![]),
+        // A hub of 32 elements: smaller than any chain core in the case above,
+        // so a cost difference here cannot be the hub's arithmetic.
+        ("spider_tiny_2x2x2x2", vec![2, 2, 2, 2]),
+        ("spider_equal_4x4x4x4", vec![4, 4, 4, 4]),
+        ("spider_unequal_2x4x8x4", vec![2, 4, 8, 4]),
+        ("spider_unequal_8x4x2x4", vec![8, 4, 2, 4]),
+    ];
+    for (name, bonds) in cases {
+        let n_sites = if bonds.is_empty() {
+            13
+        } else {
+            bonds.len() * ARM_LENGTH + 1
+        };
+        let sites: Vec<DynIndex> = (0..n_sites).map(|_| DynIndex::new_dyn(2)).collect();
+        let inputs: Vec<_> = if bonds.is_empty() {
+            let chain = crate::state::tests::full_rank_chain_guess(n_sites, 8);
+            vec![chain.clone(), chain]
+        } else {
+            (0..2)
+                .map(|input| {
+                    crate::state::tests::spider_tree(&bonds, ARM_LENGTH, ARM_CHI, input, &sites)
+                })
+                .collect()
+        };
+        let options = TreeAciOptions {
+            tolerance: 1.0e-8,
+            max_sweeps: 2,
+            min_sweeps: 2,
+            enable_global_guard: false,
+            ..TreeAciOptions::default()
+        };
+        let state = TreeAciState::<f64, usize>::initialize(&inputs, &options).unwrap();
+        let budget =
+            per_evaluator_message_cache_budget(options.message_cache_max_bytes, inputs.len())
+                .unwrap();
+        let mut evaluators =
+            InputEvaluators::new_with_message_cache_max_bytes(state.inputs, &state.problem, budget)
+                .unwrap();
+
+        let starts: Vec<Vec<usize>> = (0..NSEARCH)
+            .map(|start| {
+                (0..n_sites)
+                    .map(|site| (start * 7 + site * 3) % 2)
+                    .collect()
+            })
+            .collect();
+        evaluators.evaluate::<f64>(&starts[..1]).unwrap();
+        let mut calls = 0usize;
+        let started = Instant::now();
+        for _sweep in 0..SWEEPS {
+            for site in 0..n_sites {
+                for start in &starts {
+                    let points: Vec<Vec<usize>> = (0..2)
+                        .map(|value| {
+                            let mut point = start.clone();
+                            point[site] = value;
+                            point
+                        })
+                        .collect();
+                    evaluators.evaluate::<f64>(&points).unwrap();
+                    calls += 1;
+                }
+            }
+        }
+        let elapsed = started.elapsed();
+
+        // The same walk with the coordinate the pivot already holds dropped
+        // from every batch: one point per call instead of two, with the
+        // varying site still declared explicitly so the batch keeps the
+        // centre hint a one-point batch cannot be asked to infer.
+        let mut single_calls = 0usize;
+        let single_started = Instant::now();
+        for _sweep in 0..SWEEPS {
+            for site in 0..n_sites {
+                for start in &starts {
+                    let mut point = start.clone();
+                    point[site] = 1 - point[site];
+                    let points = vec![point];
+                    let coordinates = evaluators.expand_points(&points).unwrap();
+                    let hint = tensor4all_treetn::EvaluationHint::around(site);
+                    evaluators
+                        .evaluate_expanded::<f64>(&points, &coordinates, hint)
+                        .unwrap();
+                    single_calls += 1;
+                }
+            }
+        }
+        let single_elapsed = single_started.elapsed();
+        eprintln!(
+            "guard call cost {name} ({n_sites} sites): two_point={elapsed:?} over {calls} calls = {:.1} us/call, one_point_hinted={single_elapsed:?} over {single_calls} calls = {:.1} us/call, per-call saving={:.0}%",
+            elapsed.as_secs_f64() * 1.0e6 / calls as f64,
+            single_elapsed.as_secs_f64() * 1.0e6 / single_calls as f64,
+            100.0 * (1.0 - single_elapsed.as_secs_f64() / elapsed.as_secs_f64()),
+        );
+    }
 }

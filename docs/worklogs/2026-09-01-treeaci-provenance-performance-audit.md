@@ -3184,23 +3184,211 @@ capture can resolve its fixed `../../tensor4all-rust/tensor4all-rs` path, and
 the raw logs) live outside the repository under `/root/downstream718` and are
 not part of this change. They are disposable; the numbers above are the record.
 
+## 2026-09-06 #726/#727/#728/#729: resource limits, and where the unequal-bond cost actually is
+
+Four follow-up issues opened by the #718 closure above. Two are behaviour
+changes with tests; two were open questions the closure deliberately left
+undiagnosed, and both are answered here by measurement.
+
+### #729: element ceilings now follow `max_working_bytes`
+
+`TreeAciOptions` carried two independent families of limit. Raising
+`max_working_bytes` did not raise `max_local_matrix_elements`,
+`max_core_elements`, or `max_frame_elements`, so the `gw-rs/sgw` R10 comb
+`pi_rtau` stage was refused at `requested 17958192, limit 16777216` while the
+runner had deliberately granted CTTN a 10 GiB budget.
+
+The three ceilings are now `Option<usize>`, unset by default, and an unset
+ceiling is a quarter of `max_working_bytes` in elements of the run's scalar
+type. At the 512 MiB default that is `2^24` f64 elements -- the constant it
+replaces, so `f64` defaults are unchanged -- and at the runner's 10 GiB it is
+`335,544,320`, so the refused 17.9M-element local matrix now fits the budget
+the caller actually set. A complex run gets half the elements and the same
+bytes, which is the intended correction: the ceilings and the budget measure
+the same resource. An explicitly set ceiling is a pin and does not follow the
+budget in either direction.
+
+Resolution happens once, in `prepare_problem` (now generic over the run's
+scalar type), and every enforcement site reads the resolved value from the
+prepared problem, so two sites cannot disagree. Within one preparation the byte
+budget is checked *before* any ceiling derived from it, so an impossible budget
+is still reported as `working bytes` -- `gw-rs` asserts exactly that message for
+its deliberately impossible one-byte budget, and
+`tests/resource_limits.rs::an_impossible_budget_is_reported_as_working_bytes`
+pins it here.
+
+### #726: the coordination>=4 pre-flight degrades instead of refusing
+
+The window the issue records is real: `enumerated_candidate_frame_scratch_elements`
+reported the batched charge whenever the Cartesian cross fit
+`max_working_bytes` *alone*, and `local_update.rs` then added the update's own
+live buffers before enforcing the budget, so a local update could be refused
+even though the scalar route it would have taken before #713 was affordable.
+
+Settled as **degrade**, by making both sides of the contract use the same
+number: `candidate_frames_for_edge`, its row-major counterpart, and the
+arbitrary-degree kernel now take `reserved_bytes`, the local update computes it
+once in `reserved_working_bytes`, and both the estimate and the kernel test the
+batched cross against the budget that *remains*. Degrading only in the
+pre-flight would have been the unsafe half of the fix: the kernel would still
+have batched and overrun the aggregate budget.
+
+No configuration that previously ran changes route. A run that took the batched
+route had `reserved + batched <= budget` already -- otherwise the aggregate
+check refused it -- and that inequality is exactly the new condition. What
+changes is only the previously refused window, which now runs on the scalar
+route at the pre-#713 cost.
+`frames::tests::local_update_degrades_instead_of_refusing_an_aggregate_overrun`
+pins the window (batched fits alone, not with the reservation) and asserts the
+degraded result matches the generous-budget one to rounding.
+
+### #727: the unequal-bond asymmetry is the Guard, not the bonds
+
+`state::tests::profile_unequal_incident_bonds_at_coordination_four` rebuilds
+the benchmark's three layouts and reports the phase split. Two measurements
+settle the question.
+
+**With the Guard disabled**, the asymmetry is not there at all:
+
+| layout | sweep total | evaluated points | us / evaluated point |
+|---|---|---|---|
+| `4,4,4,4` | 53.3 ms | 38,496 | 1.39 |
+| `2,4,8,4` | 57.5 ms | 25,136 | 2.29 |
+| `8,4,2,4` | 33.6 ms | 21,568 | 1.56 |
+
+Candidate-frame routing is identical across the three (32 batched groups, 0
+scalar in each), as are the cache hit/miss shape, packing counts, and the
+factorization split. So routing, cache keying, packing and factorization -- the
+four suspects the issue lists -- are all excluded.
+
+**With the Guard enabled**, which is what `default_options()` in the benchmark
+uses:
+
+| layout | sweep total | guard search | share | sweeps |
+|---|---|---|---|---|
+| `4,4,4,4` | 50.8 ms | **0 ns, 0 calls** | 0% | 2 |
+| `2,4,8,4` | 470.1 ms | 412.5 ms | 88% | 2 |
+| `8,4,2,4` | 803.5 ms | 735.2 ms | 92% | 4 |
+
+The equal layout never invokes the Guard: it is rank-limited on every edge, so
+`run_local_sweeps` skips the search. The unequal layouts are not, so they pay a
+full search -- and on `2,4,8,4` that search injects nothing at all for its
+412 ms. That is the whole of the reported `24x`: a Guard-invocation difference,
+not a cost of unequal bonds.
+
+What makes the Guard so expensive here is the second measurement,
+`global_guard::tests::diagnostic_guard_call_cost_on_a_branched_tree`. Same
+walk shape, same site count, two points per call:
+
+| fixture | us / call |
+|---|---|
+| 13-site chain, `chi=8` | 19.5 |
+| spider, hub bonds `2,2,2,2` | 391.3 |
+| spider, hub bonds `4,4,4,4` | 385.5 |
+| spider, hub bonds `2,4,8,4` | 386.1 |
+| spider, hub bonds `8,4,2,4` | 388.3 |
+
+The branched cost does not move when the hub shrinks from 8192 elements to 32,
+so it is not arithmetic: it is a fixed ~20x per-call penalty for the topology.
+`cached_evaluator::tests::diagnostic_hinted_walk_cost_on_a_chain_versus_a_branched_tree`
+attributes it inside `tensor4all-treetn`: 13.8 us/call on the chain against
+292.1 us/call on the spider, of which the message loop is 189.7 us and the
+centre contraction 90.1 us. The cause is
+`TreeTNCachedEvaluator::can_use_raw_messages`, which returns `false` as soon as
+any node has more than three neighbours; a single coordination-4 hub therefore
+disables the raw-message kernels for *every* node of the tree and routes the
+whole evaluation through the generic `IdxTensor` path.
+
+That last step is not fixed here. Generalizing the raw message and centre
+kernels past degree three is the `tensor4all-treetn` analogue of what #713 did
+for candidate frames in `tensor4all-treeaci`, and it needs its own derivation,
+differential tests against the generic path, and gates. It is recorded as the
+remaining work for #727.
+
+### #728: the proposed batching is a pessimization; the real redundancy is elsewhere
+
+The issue asks for option 1 -- consolidating the Guard's random starts into
+fewer, larger evaluator calls -- to be measured first, on the grounds that it
+keeps the search identical. It was, in
+`global_guard::tests::diagnostic_guard_batch_shape_on_the_high_rank_chain`,
+which evaluates exactly the same points in both shapes:
+
+| fixture | per-start calls | lockstep calls | speedup |
+|---|---|---|---|
+| 32-site chain, `chi=64` | 25.06 ms / 480 calls of 2 points | 27.32 ms / 96 calls of 10 points | 0.92x |
+| 32-site chain, `chi=256` | 56.29 ms / 480 calls of 2 points | 268.56 ms / 96 calls of 10 points | **0.21x** |
+
+Batching across starts is 4.8x *slower* at `chi=256`. The reason is structural:
+a batch mixing several starts no longer varies in a single site, so it carries
+no centre hint, and the evaluator falls back to its ordinary centre selection.
+Option 1 as stated is rejected on measurement.
+
+The redundancy that is real is inside the walk itself. `floating_zone_walk`
+evaluated every candidate value at a site, including the value the pivot
+already holds -- a point it had just evaluated one step earlier, whose error it
+already knows. It now skips that candidate and folds the known error into the
+same greedy comparison, so at `local_dim = 2` the walk asks for one point per
+call instead of two. To keep this from losing the centre hint (a one-point
+batch cannot be asked which site varies), the walk now *declares* the scan site
+to its callback, and the Guard uses that instead of re-deriving it from the
+batch; `sole_varying_site` is gone.
+
+`floating_zone::tests::skipping_the_held_candidate_matches_the_full_batch_walk`
+compares the walk against a full-batch reference implementation on several
+shapes and asserts identical pivots and identical reported error with strictly
+fewer evaluated points.
+
+Paired measurement on the fixture the issue names
+(`profile_high_rank_chain_phases_and_candidate_cache`, 32 sites, `chi=256`,
+Guard on, three repetitions per arm, same machine, medians):
+
+| | baseline | candidate | delta |
+|---|---|---|---|
+| sweep total | 1.8735 s | 1.7873 s | -4.6% |
+| guard search | 1.1894 s | 1.1209 s | -5.8% |
+| input evaluation | 1.1029 s | 1.0456 s | -5.2% |
+| input calls / scalars | 2218 / 8844 | 2090 / **4236** | -5.8% / **-52.1%** |
+| output evaluation | 84.33 ms | 73.40 ms | -13.0% |
+| output calls / scalars | 2211 / 4387 | 2083 / **2083** | -5.8% / **-52.5%** |
+
+The baseline's own run-to-run spread is 6.7% on the sweep total and 8.2% on the
+guard search, so the ~5% wall-time gain is **inside the noise floor and is not
+claimed**. The efficiency pass is the resource counters: half the evaluated
+points, ~6% fewer calls, and no time regression on any counter. Halving
+evaluated points is not cosmetic downstream -- the Guard calls the caller's
+operator on exactly those points, and in `sgw` that operator is a full
+elementwise contraction.
+
+The trajectory is unchanged, which is the correctness claim that matters here:
+both arms report `commits=217`, `completed=7`, and candidate cache
+`hits/misses = 9104/21992` at `chi=256`.
+
+On the branched fixture of #727 the same change halves the Guard's evaluated
+scalars (1652 -> 742 input, 816 -> 361 output) with wall time flat within noise
+(412.5 ms -> 419.5 ms), because the candidate it drops is the one whose messages
+were already cached. The branched per-call penalty above is what dominates
+there, and it is the open item.
+
 ### Open items
 
-1. **Unequal incident bonds cost an order of magnitude more per unit of
-   required work.** At coordination 4 with a fixed hub bond product of 256, the
-   `8,4,2,4` layout takes `6.06 us` per evaluated point against the equal
-   layout's `0.25 us`, while the topology-required `outgoing_dim *
-   product(incoming bonds)` is identical (256) on every outward arc and the
-   unequal layout evaluates *fewer* points. Reproducible across three
-   repetitions. Not diagnosed here; it needs a profile of the routing, cache,
-   and factorization paths under an unequal layout. This is a new finding of
-   the #718 gate and is not covered by any existing #699 subissue.
-2. **The Guard's random-start search still dominates the 32-site high-rank
-   chain.** At `chi=256` with the Guard enabled it is `1.231894 s` of a
-   `1.498733 s` sweep total, `1.147752 s` of which is input evaluation across
-   2,218 calls returning 8,844 scalars. Not a regression -- #709 is what makes
-   the fixture finish at all -- but it is the largest remaining single cost on
-   that fixture and no subissue owns it.
+1. **DIAGNOSED on 2026-09-06 (#727), one step left.** The unequal-bond
+   asymmetry is a Guard-invocation difference plus a branched-tree evaluation
+   cost, not a cost of unequal bonds: with the Guard disabled the three layouts
+   are within 1.6x per evaluated point, and with it enabled the equal layout is
+   rank-limited and never searches at all. What remains open is the cause of
+   the branched cost -- `TreeTNCachedEvaluator::can_use_raw_messages` refuses
+   the raw kernels for the whole tree as soon as one node has more than three
+   neighbours, which is a fixed ~20x per-call penalty independent of bond
+   dimension. Generalizing those kernels past degree three is the remaining
+   work. See the `#726/#727/#728/#729` section above.
+2. **PARTLY ADDRESSED on 2026-09-06 (#728).** The proposed consolidation of
+   random starts into fewer larger calls was measured and rejected (0.21x at
+   `chi=256`: a mixed-start batch loses the centre hint). The walk instead
+   stopped re-evaluating the candidate the pivot already holds, which halves
+   the Guard's evaluated points on an unchanged trajectory; the wall-time gain
+   is inside the noise floor and is not claimed. The Guard still dominates this
+   fixture, and the next lever is item 1's branched per-call penalty rather
+   than the search's shape. See the section above.
 3. **The workspace-wide pre-PR gate is pending.** `cargo clippy --workspace`,
    `cargo nextest run --cargo-profile ci --workspace --exclude tensor4all-hdf5`,
    `cargo test --profile ci -p tensor4all-hdf5`,

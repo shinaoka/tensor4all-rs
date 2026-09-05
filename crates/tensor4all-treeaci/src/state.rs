@@ -230,4 +230,4 @@ impl<'a, T: TreeAciScalar, V: TreeAciNode> TreeAciState<'a, T, V> {
 }
 
 #[cfg(test)]
-mod tests;
+pub(crate) mod tests;
