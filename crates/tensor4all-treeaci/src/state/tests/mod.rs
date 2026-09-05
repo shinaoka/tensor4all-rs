@@ -403,7 +403,7 @@ fn unseeded_initialization_defers_numeric_canonicalization() {
         rng_seed: 7,
         ..TreeAciOptions::default()
     };
-    let problem = prepare_problem(&inputs, &options).unwrap();
+    let problem = prepare_problem::<f64, _>(&inputs, &options).unwrap();
     let algebraic_bounds = algebraic_edge_bounds(&problem).unwrap();
     let edge_ranks = initial_edge_ranks(&inputs, &problem, &options, &algebraic_bounds).unwrap();
     let raw =
@@ -439,7 +439,7 @@ fn explicit_guess_rank_and_resource_limits_are_rejected() {
             &inputs,
             &TreeAciOptions {
                 initial_guess: Some(guess),
-                max_core_elements: 3,
+                max_core_elements: Some(3),
                 ..TreeAciOptions::default()
             }
         ),

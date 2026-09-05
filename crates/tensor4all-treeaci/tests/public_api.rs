@@ -29,9 +29,23 @@ fn options_defaults_are_bounded_and_consistent() {
     assert!(options.root.is_none());
     assert!(options.max_candidate_rows > 0);
     assert!(options.max_candidate_cols > 0);
-    assert!(options.max_local_matrix_elements > 0);
-    assert!(options.max_core_elements > 0);
-    assert!(options.max_frame_elements > 0);
+    // The element ceilings are unset by default and derived from the working
+    // budget, which is what a caller raising that budget actually gets.
+    assert_eq!(options.max_local_matrix_elements, None);
+    assert_eq!(options.max_core_elements, None);
+    assert_eq!(options.max_frame_elements, None);
+    assert_eq!(
+        options.resolved_max_local_matrix_elements::<f64>(),
+        options.max_working_bytes / 4 / std::mem::size_of::<f64>()
+    );
+    assert_eq!(
+        options.resolved_max_core_elements::<f64>(),
+        options.resolved_max_local_matrix_elements::<f64>()
+    );
+    assert_eq!(
+        options.resolved_max_frame_elements::<f64>(),
+        options.resolved_max_local_matrix_elements::<f64>()
+    );
     assert!(options.max_sample_arena_bytes > 0);
     assert!(options.max_working_bytes > 0);
     assert_eq!(

@@ -355,6 +355,12 @@ fn global_search_rejects_the_start_batch_before_calling_the_operator() {
     let options = TreeAciOptions {
         nsearch_global_pivots: 4,
         max_working_bytes: 64,
+        // Pin the element ceilings so the 64-byte budget exercises only the
+        // guard's start-batch charge. Left unset they would follow the budget
+        // down to two elements and preparation would refuse the tree first.
+        max_local_matrix_elements: Some(1 << 24),
+        max_core_elements: Some(1 << 24),
+        max_frame_elements: Some(1 << 24),
         ..TreeAciOptions::default()
     };
     let inputs = vec![input];

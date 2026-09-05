@@ -84,7 +84,7 @@ where
     enforce_limit(
         "local matrix elements",
         point_count,
-        options.max_local_matrix_elements,
+        problem.max_local_matrix_elements,
     )?;
     let input_value_elements =
         inputs
@@ -151,8 +151,8 @@ where
             .ok_or(TreeAciError::SizeOverflow {
                 context: "right local factor elements",
             })?;
-    enforce_limit("core elements", left_elements, options.max_core_elements)?;
-    enforce_limit("core elements", right_elements, options.max_core_elements)?;
+    enforce_limit("core elements", left_elements, problem.max_core_elements)?;
+    enforce_limit("core elements", right_elements, problem.max_core_elements)?;
 
     let mut input_values = vec![T::default(); input_value_elements];
     #[cfg(test)]

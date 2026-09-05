@@ -156,7 +156,7 @@ impl<'a, T: TreeAciScalar, V: TreeAciNode> TreeAciState<'a, T, V> {
     ) -> Result<Self> {
         #[cfg(test)]
         let stage_started = std::time::Instant::now();
-        let problem = prepare_problem(inputs, options)?;
+        let problem = prepare_problem::<T, V>(inputs, options)?;
         let algebraic_edge_bounds = algebraic_edge_bounds(&problem)?;
         let initial_edge_ranks =
             initial_edge_ranks(inputs, &problem, options, &algebraic_edge_bounds)?;
@@ -165,7 +165,7 @@ impl<'a, T: TreeAciScalar, V: TreeAciNode> TreeAciState<'a, T, V> {
         #[cfg(test)]
         let stage_started = std::time::Instant::now();
         let mut output = if let Some(guess) = &options.initial_guess {
-            validate_initial_guess::<T, V>(guess, &inputs[0], &problem, options)?;
+            validate_initial_guess::<T, V>(guess, &inputs[0], &problem)?;
             guess.clone()
         } else {
             build_random_output::<T, V>(&inputs[0], &problem, &initial_edge_ranks, options)?

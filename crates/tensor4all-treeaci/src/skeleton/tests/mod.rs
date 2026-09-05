@@ -42,7 +42,7 @@ fn all_points(node_count: usize) -> Vec<Vec<usize>> {
 }
 
 fn prepare(edges: &[(usize, usize)], node_count: usize) -> PreparedTreeProblem<usize> {
-    prepare_problem(&[make_tree(edges, node_count)], &TreeAciOptions::default())
+    prepare_problem::<f64, _>(&[make_tree(edges, node_count)], &TreeAciOptions::default())
         .expect("fixture problem")
 }
 

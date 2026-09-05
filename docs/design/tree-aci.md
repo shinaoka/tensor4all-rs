@@ -91,7 +91,7 @@ the run boundary releases all of them.
 | lifetime | one run | one run, incrementally extended after sample growth | input evaluators: one run; output evaluator: one guard scan |
 | contents | immutable component-sample records and deduplication keys | exact directed component contractions plus optional candidate contractions | directed subtree messages reused across floating-zone batches |
 | aggregate bound | `max_sample_arena_bytes`, 256 MiB | `max_frame_bytes`, 256 MiB | `message_cache_max_bytes`, 256 MiB shared across all evaluators |
-| per-entry bound | -- | `max_frame_elements`, `2^24` | -- |
+| per-entry bound | -- | `max_frame_elements`, unset by default and then a quarter of `max_working_bytes` (`2^24` f64 elements at the 512 MiB default) | -- |
 | accounting | `sample_arena_records`, `sample_arena_retained_bytes` | `frame_records`, `frame_retained_bytes` | bounded but not currently exposed in diagnostics |
 
 Mandatory arena and directed-frame bounds are checked before allocation, so an
@@ -105,6 +105,20 @@ accounting, not allocator or process measurements.
 The per-entry and aggregate frame bounds are independent and neither implies the
 other: the cache keeps one frame per input per directed edge, so a per-frame
 ceiling sized to admit one frame still admits all of them.
+
+The element ceilings (`max_local_matrix_elements`, `max_core_elements`,
+`max_frame_elements`) and the working-byte budget measure the same physical
+resource, so the ceilings are not independent constants: each is `None` by
+default and then derived as a quarter of `max_working_bytes`, expressed in
+elements of the run's scalar type and resolved once, in `prepare_problem`, for
+every later enforcement site. Raising the budget raises them with it. Setting
+one explicitly pins it, and a pinned ceiling no longer follows the budget in
+either direction. The retention budgets (`max_frame_bytes`,
+`max_sample_arena_bytes`, `message_cache_max_bytes`) are separate and do not
+follow the working budget, because they bound what survives between local
+updates rather than what one update may allocate. Within one preparation the
+byte budget is checked before any ceiling derived from it, so an impossible
+budget is reported as `working bytes` rather than as a derived ceiling.
 
 The two state-owned cache families report through `TreeAciDiagnostics`, in the
 same logical-byte units. Evaluator messages obey their aggregate option bound

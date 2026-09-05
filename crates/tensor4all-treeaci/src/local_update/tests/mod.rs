@@ -56,7 +56,7 @@ fn local_entries_equal_direct_values_and_callback_layout_is_column_major() {
         two_node_tree_with_indices(2.0, s0, s1, DynIndex::new_dyn(2)),
     ];
     let options = TreeAciOptions::default();
-    let problem = prepare_problem(&inputs, &options).unwrap();
+    let problem = prepare_problem::<f64, _>(&inputs, &options).unwrap();
     let (arena, active) = SampleArena::from_global_seeds(&problem, &[]).unwrap();
     let frames = InputFrameStore::from_samples(&inputs, &problem, &arena).unwrap();
     let calls = Cell::new(0);
@@ -98,7 +98,7 @@ fn luci_factors_reconstruct_rank_one_and_zero_targets() {
     for zero in [false, true] {
         let inputs = vec![two_node_tree(1.0)];
         let options = TreeAciOptions::default();
-        let problem = prepare_problem(&inputs, &options).unwrap();
+        let problem = prepare_problem::<f64, _>(&inputs, &options).unwrap();
         let (arena, active) = SampleArena::from_global_seeds(&problem, &[]).unwrap();
         let frames = InputFrameStore::from_samples(&inputs, &problem, &arena).unwrap();
         let mut operator = |batch: crate::TreeElementwiseBatch<'_, f64>, output: &mut [f64]| {
@@ -137,7 +137,7 @@ fn luci_factors_reconstruct_rank_one_and_zero_targets() {
 fn callback_error_and_matrix_budget_stop_before_factorization() {
     let inputs = vec![two_node_tree(1.0)];
     let options = TreeAciOptions::default();
-    let problem = prepare_problem(&inputs, &options).unwrap();
+    let problem = prepare_problem::<f64, _>(&inputs, &options).unwrap();
     let (arena, active) = SampleArena::from_global_seeds(&problem, &[]).unwrap();
     let frames = InputFrameStore::from_samples(&inputs, &problem, &arena).unwrap();
     let mut failing = |_batch: crate::TreeElementwiseBatch<'_, f64>, _output: &mut [f64]| {
@@ -152,15 +152,24 @@ fn callback_error_and_matrix_budget_stop_before_factorization() {
         Err(TreeAciError::Callback { message }) if message == "sentinel"
     ));
 
+    // Ceilings are resolved once, at preparation, so the ceiling this update
+    // enforces lives on the prepared problem. A whole-run configuration cannot
+    // reach this update with a ceiling below four elements -- preparation
+    // refuses the same two-by-two minimum first, which is the point of that
+    // earlier check -- so the boundary is pinned on the prepared problem the
+    // way the working-byte boundaries below and in `frames` are.
     let limited = TreeAciOptions {
-        max_local_matrix_elements: 3,
+        max_local_matrix_elements: Some(4),
         ..TreeAciOptions::default()
     };
+    let mut limited_problem = prepare_problem::<f64, _>(&inputs, &limited).unwrap();
+    assert_eq!(limited_problem.max_local_matrix_elements, 4);
+    limited_problem.max_local_matrix_elements = 3;
     let mut unused = |_batch: crate::TreeElementwiseBatch<'_, f64>, _output: &mut [f64]| Ok(());
     assert!(matches!(
         materialize_and_factor_edge(
             &inputs,
-            &problem,
+            &limited_problem,
             &active,
             &frames,
             0,
@@ -182,12 +191,13 @@ fn callback_error_and_matrix_budget_stop_before_factorization() {
         max_working_bytes: 191,
         ..TreeAciOptions::default()
     };
+    let working_limited_problem = prepare_problem::<f64, _>(&inputs, &working_limited).unwrap();
     let mut working_unused =
         |_batch: crate::TreeElementwiseBatch<'_, f64>, _output: &mut [f64]| Ok(());
     assert!(matches!(
         materialize_and_factor_edge(
             &inputs,
-            &problem,
+            &working_limited_problem,
             &active,
             &frames,
             0,
@@ -312,7 +322,7 @@ fn run_local_update_measurement(
 ) {
     let inputs = vec![input.clone()];
     let options = crate::TreeAciOptions::default();
-    let problem = crate::problem::prepare_problem(&inputs, &options).unwrap();
+    let problem = crate::problem::prepare_problem::<f64, _>(&inputs, &options).unwrap();
     let (arena, active) = SampleArena::from_global_seeds(&problem, samples).unwrap();
     let frames = InputFrameStore::from_samples(&inputs, &problem, &arena).unwrap();
     let forward = problem
@@ -429,7 +439,7 @@ fn packed_local_update_release_measurement_for_chain_and_branch() {
 fn candidate_frames_batched_path_matches_scalar_path_on_a_chain() {
     let inputs = vec![three_node_chain_for_batched_dispatch()];
     let options = TreeAciOptions::default();
-    let problem = prepare_problem(&inputs, &options).unwrap();
+    let problem = prepare_problem::<f64, _>(&inputs, &options).unwrap();
 
     // Seed both physical values of node 0 so directed edge 0 -> 1's
     // candidate set has two distinct incoming samples; combined with node

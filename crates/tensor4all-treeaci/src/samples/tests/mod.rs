@@ -31,7 +31,7 @@ fn prepare(
     edges: &[(usize, usize)],
     node_count: usize,
 ) -> crate::problem::PreparedTreeProblem<usize> {
-    prepare_problem(&[make_tree(edges, node_count)], &TreeAciOptions::default()).unwrap()
+    prepare_problem::<f64, _>(&[make_tree(edges, node_count)], &TreeAciOptions::default()).unwrap()
 }
 
 #[test]
@@ -331,7 +331,7 @@ fn invalid_points_and_arena_budget_fail_before_active_commit() {
         max_sample_arena_bytes: 1,
         ..TreeAciOptions::default()
     };
-    let limited_problem = prepare_problem(&[make_tree(&[(0, 1)], 2)], &options).unwrap();
+    let limited_problem = prepare_problem::<f64, _>(&[make_tree(&[(0, 1)], 2)], &options).unwrap();
     assert!(matches!(
         SampleArena::from_global_seeds(&limited_problem, &[vec![0, 0]]),
         Err(TreeAciError::ResourceLimit {

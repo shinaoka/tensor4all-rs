@@ -5,7 +5,9 @@ use std::collections::{HashMap, VecDeque};
 use tensor4all_core::{DynIndex, IdxTensor, IndexLike};
 use tensor4all_treetn::TreeTN;
 
-use crate::{path_cover::SweepPlan, Result, TreeAciError, TreeAciNode, TreeAciOptions};
+use crate::{
+    path_cover::SweepPlan, Result, TreeAciError, TreeAciNode, TreeAciOptions, TreeAciScalar,
+};
 
 pub(crate) type DirectedEdgeId = usize;
 
@@ -38,17 +40,31 @@ pub(crate) struct PreparedTreeProblem<V> {
     pub(crate) root: V,
     pub(crate) schedule: SweepPlan,
     pub(crate) max_sample_arena_bytes: usize,
+    /// Resource ceilings resolved once, for the scalar type the run uses.
+    ///
+    /// Every ceiling below is the value
+    /// [`TreeAciOptions::resolved_max_core_elements`] and its siblings return
+    /// for that scalar, so a ceiling left unset by the caller has already been
+    /// derived from `max_working_bytes` here and no later site re-derives it.
     pub(crate) max_frame_elements: usize,
     pub(crate) max_frame_bytes: usize,
     pub(crate) max_core_elements: usize,
+    pub(crate) max_local_matrix_elements: usize,
     pub(crate) max_working_bytes: usize,
 }
 
-pub(crate) fn prepare_problem<V: TreeAciNode>(
+/// Validates the inputs and options of one run and resolves its ceilings.
+///
+/// Scalar `T` is the type the run's cores and local matrices are materialized
+/// in, and is what the byte-derived element ceilings are charged against; see
+/// [`TreeAciOptions::max_working_bytes`].
+pub(crate) fn prepare_problem<T: TreeAciScalar, V: TreeAciNode>(
     inputs: &[TreeTN<IdxTensor, V>],
     options: &TreeAciOptions<V>,
 ) -> Result<PreparedTreeProblem<V>> {
     validate_options(options)?;
+    let max_core_elements = options.resolved_max_core_elements::<T>();
+    let max_local_matrix_elements = options.resolved_max_local_matrix_elements::<T>();
     let reference = inputs.first().ok_or(TreeAciError::NoInputs)?;
     if reference.node_count() == 0 {
         return Err(TreeAciError::EmptyTree { input: 0 });
@@ -149,23 +165,6 @@ pub(crate) fn prepare_problem<V: TreeAciNode>(
         });
     }
 
-    for tree in inputs {
-        for node in &node_order {
-            let node_index = tree
-                .node_index(node)
-                .ok_or(TreeAciError::InternalInvariant {
-                    message: "topology-compatible input is missing a node",
-                })?;
-            let tensor = tree
-                .tensor(node_index)
-                .ok_or(TreeAciError::InternalInvariant {
-                    message: "topology-compatible input is missing a tensor",
-                })?;
-            let elements = checked_product(tensor.indices().iter().map(IndexLike::dim), "core")?;
-            enforce_limit("core elements", elements, options.max_core_elements)?;
-        }
-    }
-
     let mut edges = Vec::with_capacity(reference.edge_count());
     for (from_position, from) in node_order.iter().enumerate() {
         let from_index = reference
@@ -193,6 +192,12 @@ pub(crate) fn prepare_problem<V: TreeAciNode>(
     }
     edges.sort_unstable();
 
+    // The byte budget is checked before any element ceiling derived from it,
+    // so a run that the budget alone cannot admit is reported against the
+    // budget the caller set rather than against a ceiling the caller never
+    // saw. A derived ceiling then only ever narrows a run the budget would
+    // have admitted. The minimum local matrix is charged at the widest
+    // supported scalar, because it is a topology-only lower bound.
     for &(left, right) in &edges {
         let elements = physical[left]
             .local_dim
@@ -200,17 +205,30 @@ pub(crate) fn prepare_problem<V: TreeAciNode>(
             .ok_or(TreeAciError::SizeOverflow {
                 context: "minimum local matrix",
             })?;
-        enforce_limit(
-            "local matrix elements",
-            elements,
-            options.max_local_matrix_elements,
-        )?;
         let bytes = elements
             .checked_mul(std::mem::size_of::<num_complex::Complex64>())
             .ok_or(TreeAciError::SizeOverflow {
                 context: "minimum local matrix bytes",
             })?;
         enforce_limit("working bytes", bytes, options.max_working_bytes)?;
+        enforce_limit("local matrix elements", elements, max_local_matrix_elements)?;
+    }
+
+    for tree in inputs {
+        for node in &node_order {
+            let node_index = tree
+                .node_index(node)
+                .ok_or(TreeAciError::InternalInvariant {
+                    message: "topology-compatible input is missing a node",
+                })?;
+            let tensor = tree
+                .tensor(node_index)
+                .ok_or(TreeAciError::InternalInvariant {
+                    message: "topology-compatible input is missing a tensor",
+                })?;
+            let elements = checked_product(tensor.indices().iter().map(IndexLike::dim), "core")?;
+            enforce_limit("core elements", elements, max_core_elements)?;
+        }
     }
 
     let requested_start = requested_root
@@ -237,9 +255,10 @@ pub(crate) fn prepare_problem<V: TreeAciNode>(
         root,
         schedule,
         max_sample_arena_bytes: options.max_sample_arena_bytes,
-        max_frame_elements: options.max_frame_elements,
+        max_frame_elements: options.resolved_max_frame_elements::<T>(),
         max_frame_bytes: options.max_frame_bytes,
-        max_core_elements: options.max_core_elements,
+        max_core_elements,
+        max_local_matrix_elements,
         max_working_bytes: options.max_working_bytes,
     })
 }
@@ -331,19 +350,24 @@ fn validate_options<V: TreeAciNode>(options: &TreeAciOptions<V>) -> Result<()> {
         });
     }
     for (name, limit) in [
-        ("max_candidate_rows", options.max_candidate_rows),
-        ("max_candidate_cols", options.max_candidate_cols),
+        ("max_candidate_rows", Some(options.max_candidate_rows)),
+        ("max_candidate_cols", Some(options.max_candidate_cols)),
         (
             "max_local_matrix_elements",
             options.max_local_matrix_elements,
         ),
         ("max_core_elements", options.max_core_elements),
         ("max_frame_elements", options.max_frame_elements),
-        ("max_frame_bytes", options.max_frame_bytes),
-        ("max_sample_arena_bytes", options.max_sample_arena_bytes),
-        ("max_working_bytes", options.max_working_bytes),
+        ("max_frame_bytes", Some(options.max_frame_bytes)),
+        (
+            "max_sample_arena_bytes",
+            Some(options.max_sample_arena_bytes),
+        ),
+        ("max_working_bytes", Some(options.max_working_bytes)),
     ] {
-        if limit == 0 {
+        // An unset element ceiling is derived from `max_working_bytes`, which
+        // is checked in this same loop, so only an explicit zero is rejected.
+        if limit == Some(0) {
             return Err(TreeAciError::InvalidOption {
                 option: name,
                 message: "resource limits must be positive",
@@ -468,7 +492,7 @@ mod tests {
         ] {
             let node_count = edges.len() + 1;
             let tree = make_tree(&edges, &one_site_indices(node_count), 2);
-            let prepared = prepare_problem(&[tree], &TreeAciOptions::default()).unwrap();
+            let prepared = prepare_problem::<f64, _>(&[tree], &TreeAciOptions::default()).unwrap();
             assert_eq!(prepared.node_order.len(), node_count);
             assert_eq!(prepared.directed_edges.len(), 2 * edges.len());
         }
@@ -477,7 +501,7 @@ mod tests {
     #[test]
     fn directed_edges_record_reverse_and_incoming_branches() {
         let tree = make_tree(&[(0, 1), (0, 2), (0, 3)], &one_site_indices(4), 2);
-        let prepared = prepare_problem(&[tree], &TreeAciOptions::default()).unwrap();
+        let prepared = prepare_problem::<f64, _>(&[tree], &TreeAciOptions::default()).unwrap();
 
         for arc in &prepared.directed_edges {
             let reverse = &prepared.directed_edges[arc.reverse];
@@ -506,14 +530,14 @@ mod tests {
     #[test]
     fn physical_layout_follows_reference_tensor_order_and_allows_zero_legs() {
         let scalar_tree = make_tree(&[], &[vec![]], 1);
-        let scalar = prepare_problem(&[scalar_tree], &TreeAciOptions::default()).unwrap();
+        let scalar = prepare_problem::<f64, _>(&[scalar_tree], &TreeAciOptions::default()).unwrap();
         assert_eq!(scalar.physical[0].local_dim, 1);
         assert!(scalar.physical[0].strides.is_empty());
 
         let first = DynIndex::new_dyn(2);
         let second = DynIndex::new_dyn(3);
         let tree = make_tree(&[], &[vec![second.clone(), first.clone()]], 1);
-        let prepared = prepare_problem(&[tree], &TreeAciOptions::default()).unwrap();
+        let prepared = prepare_problem::<f64, _>(&[tree], &TreeAciOptions::default()).unwrap();
         assert_eq!(prepared.physical[0].indices, vec![second, first]);
         assert_eq!(prepared.physical[0].dims, vec![3, 2]);
         assert_eq!(prepared.physical[0].strides, vec![1, 3]);
@@ -527,7 +551,7 @@ mod tests {
         let primed = make_tree(&[], &[vec![site.prime()]], 1);
 
         assert!(matches!(
-            prepare_problem(&[reference, primed], &TreeAciOptions::default()),
+            prepare_problem::<f64, _>(&[reference, primed], &TreeAciOptions::default()),
             Err(TreeAciError::PhysicalIndexMismatch { input: 1, .. })
         ));
     }
@@ -537,17 +561,19 @@ mod tests {
         let physical = one_site_indices(2);
         let rank_two = make_tree(&[(0, 1)], &physical, 2);
         let rank_five = make_tree(&[(0, 1)], &physical, 5);
-        assert!(prepare_problem(&[rank_two, rank_five], &TreeAciOptions::default()).is_ok());
+        assert!(
+            prepare_problem::<f64, _>(&[rank_two, rank_five], &TreeAciOptions::default()).is_ok()
+        );
     }
 
     #[test]
     fn rejects_missing_empty_mismatched_and_oversized_inputs() {
         assert!(matches!(
-            prepare_problem::<usize>(&[], &TreeAciOptions::default()),
+            prepare_problem::<f64, usize>(&[], &TreeAciOptions::default()),
             Err(TreeAciError::NoInputs)
         ));
         assert!(matches!(
-            prepare_problem::<usize>(&[TreeTN::new()], &TreeAciOptions::default()),
+            prepare_problem::<f64, usize>(&[TreeTN::new()], &TreeAciOptions::default()),
             Err(TreeAciError::EmptyTree { input: 0 })
         ));
 
@@ -555,17 +581,17 @@ mod tests {
         let path = make_tree(&[(0, 1), (1, 2)], &sites, 2);
         let star = make_tree(&[(0, 1), (0, 2)], &sites, 2);
         assert!(matches!(
-            prepare_problem(&[path, star], &TreeAciOptions::default()),
+            prepare_problem::<f64, _>(&[path, star], &TreeAciOptions::default()),
             Err(TreeAciError::TopologyMismatch { input: 1 })
         ));
 
         let tree = make_tree(&[], &[vec![DynIndex::new_dyn(8)]], 1);
         let options = TreeAciOptions {
-            max_core_elements: 7,
+            max_core_elements: Some(7),
             ..TreeAciOptions::default()
         };
         assert!(matches!(
-            prepare_problem(&[tree], &options),
+            prepare_problem::<f64, _>(&[tree], &options),
             Err(TreeAciError::ResourceLimit {
                 resource: "core elements",
                 requested: 8,
@@ -594,7 +620,7 @@ mod tests {
         cycle.connect(nodes[1], &b12, nodes[2], &b12).unwrap();
         cycle.connect(nodes[2], &b20, nodes[0], &b20).unwrap();
         assert!(matches!(
-            prepare_problem(&[cycle], &TreeAciOptions::default()),
+            prepare_problem::<f64, _>(&[cycle], &TreeAciOptions::default()),
             Err(TreeAciError::TreeTN(_))
         ));
 
@@ -607,7 +633,7 @@ mod tests {
             ..TreeAciOptions::default()
         };
         assert!(matches!(
-            prepare_problem(&[tree], &options),
+            prepare_problem::<f64, _>(&[tree], &options),
             Err(TreeAciError::InvalidOption { option: "root", .. })
         ));
     }

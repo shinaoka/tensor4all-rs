@@ -1,9 +1,21 @@
 //! Configuration for tree ACI preparation and execution.
 
+use std::mem::size_of;
+
 use tensor4all_core::IdxTensor;
 use tensor4all_treetn::TreeTN;
 
-use crate::{TreeAciNode, TreeAciTraversalStrategy};
+use crate::{TreeAciNode, TreeAciScalar, TreeAciTraversalStrategy};
+
+/// Share of [`TreeAciOptions::max_working_bytes`] one derived object may claim.
+///
+/// A local candidate matrix, a node core, and a cached directed frame each
+/// coexist with the other transient buffers of a single local update, so no
+/// one of them may claim the whole budget. A quarter is the ratio the crate's
+/// original hard-coded ceilings had against the original budget (`2^24` f64
+/// elements is 128 MiB, against 512 MiB), so deriving at this share leaves the
+/// `f64` defaults exactly where they were while making them follow the budget.
+const WORKING_BUDGET_OBJECT_SHARE: usize = 4;
 
 /// Controls tree ACI sweeps, global validation, and allocation limits.
 ///
@@ -62,19 +74,44 @@ pub struct TreeAciOptions<V: TreeAciNode> {
     /// Multiplier applied to the global-search acceptance threshold. Default: `10`.
     pub global_tolerance_margin: f64,
     /// Maximum rows in a materialized local candidate matrix. Default: `2^20`.
+    ///
+    /// This and [`Self::max_candidate_cols`] are shape guards rather than
+    /// memory guards: they bound how far candidate enumeration may run away on
+    /// one side of an edge, counted in candidates and not in bytes, and they
+    /// therefore do not follow [`Self::max_working_bytes`]. What the resulting
+    /// matrix may occupy is [`Self::max_local_matrix_elements`], which does.
     pub max_candidate_rows: usize,
     /// Maximum columns in a materialized local candidate matrix. Default: `2^20`.
+    ///
+    /// The column-side counterpart of [`Self::max_candidate_rows`], with the
+    /// same units and the same independence from the working budget.
     pub max_candidate_cols: usize,
-    /// Maximum elements in a local candidate matrix. Default: `2^24`.
-    pub max_local_matrix_elements: usize,
-    /// Maximum elements in any prepared or output node core. Default: `2^24`.
-    pub max_core_elements: usize,
-    /// Maximum elements in one cached directed frame. Default: `2^24`.
+    /// Maximum elements in a local candidate matrix, or `None` (the default)
+    /// to derive the ceiling from [`Self::max_working_bytes`].
+    ///
+    /// A derived ceiling is a quarter of the working budget expressed in
+    /// elements of the run's scalar type, so raising the budget raises this
+    /// ceiling with it; at the default 512 MiB budget it is `2^24` `f64`
+    /// elements, the value this field was fixed at before it followed the
+    /// budget. Set `Some(n)` only to pin a ceiling that must *not* follow the
+    /// budget. [`Self::resolved_max_local_matrix_elements`] returns the value
+    /// a run actually enforces.
+    pub max_local_matrix_elements: Option<usize>,
+    /// Maximum elements in any prepared or output node core, or `None` (the
+    /// default) to derive the ceiling from [`Self::max_working_bytes`] exactly
+    /// as [`Self::max_local_matrix_elements`] does.
+    ///
+    /// [`Self::resolved_max_core_elements`] returns the enforced value.
+    pub max_core_elements: Option<usize>,
+    /// Maximum elements in one cached directed frame, or `None` (the default)
+    /// to derive the ceiling from [`Self::max_working_bytes`] exactly as
+    /// [`Self::max_local_matrix_elements`] does.
     ///
     /// This bounds a single frame. The frame cache retains one frame per input
     /// per directed edge, so [`Self::max_frame_bytes`] is what bounds the
-    /// cache as a whole.
-    pub max_frame_elements: usize,
+    /// cache as a whole. [`Self::resolved_max_frame_elements`] returns the
+    /// enforced value.
+    pub max_frame_elements: Option<usize>,
     /// Maximum logical bytes retained by the directed-frame cache, across every
     /// input and every directed edge, plus the pivot-search candidate-frame
     /// cache that shares this budget. Default: 256 MiB.
@@ -89,6 +126,19 @@ pub struct TreeAciOptions<V: TreeAciNode> {
     /// Maximum logical bytes retained by immutable component samples. Default: 256 MiB.
     pub max_sample_arena_bytes: usize,
     /// Maximum estimated temporary working storage. Default: 512 MiB.
+    ///
+    /// This is the governing budget for one local update's live buffers, and
+    /// every element ceiling left unset follows it: raising this field raises
+    /// [`Self::max_local_matrix_elements`], [`Self::max_core_elements`], and
+    /// [`Self::max_frame_elements`] in step, each to a quarter of the budget
+    /// in elements of the run's scalar type. A ceiling set explicitly keeps
+    /// overriding the budget in either direction.
+    ///
+    /// The retention budgets are separate and do not follow this one, because
+    /// they bound what is kept *between* updates rather than what one update
+    /// may allocate: [`Self::max_frame_bytes`],
+    /// [`Self::message_cache_max_bytes`], and
+    /// [`Self::max_sample_arena_bytes`].
     pub max_working_bytes: usize,
     /// Edge traversal strategy. Default: continuous minimum-retracing walk.
     pub traversal_strategy: TreeAciTraversalStrategy,
@@ -113,9 +163,9 @@ impl<V: TreeAciNode> Default for TreeAciOptions<V> {
             global_tolerance_margin: 10.0,
             max_candidate_rows: 1 << 20,
             max_candidate_cols: 1 << 20,
-            max_local_matrix_elements: 1 << 24,
-            max_core_elements: 1 << 24,
-            max_frame_elements: 1 << 24,
+            max_local_matrix_elements: None,
+            max_core_elements: None,
+            max_frame_elements: None,
             max_frame_bytes: 256 << 20,
             max_sample_arena_bytes: 256 << 20,
             max_working_bytes: 512 << 20,
@@ -124,8 +174,115 @@ impl<V: TreeAciNode> Default for TreeAciOptions<V> {
     }
 }
 
+impl<V: TreeAciNode> TreeAciOptions<V> {
+    /// Element ceiling a run with scalar `T` enforces for a local candidate
+    /// matrix.
+    ///
+    /// Returns [`Self::max_local_matrix_elements`] when it is set, and the
+    /// budget-derived ceiling otherwise.
+    ///
+    /// # Returns
+    ///
+    /// The ceiling in elements of `T`, which is what
+    /// [`TreeAciError::ResourceLimit`](crate::TreeAciError::ResourceLimit)
+    /// reports as `limit` for the `local matrix elements` resource.
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// use tensor4all_treeaci::TreeAciOptions;
+    ///
+    /// let mut options = TreeAciOptions::<usize>::default();
+    /// assert_eq!(options.resolved_max_local_matrix_elements::<f64>(), 1 << 24);
+    ///
+    /// // The ceiling follows the budget instead of silently overriding it.
+    /// options.max_working_bytes *= 4;
+    /// assert_eq!(options.resolved_max_local_matrix_elements::<f64>(), 1 << 26);
+    ///
+    /// // An explicit ceiling still wins, in either direction.
+    /// options.max_local_matrix_elements = Some(1024);
+    /// assert_eq!(options.resolved_max_local_matrix_elements::<f64>(), 1024);
+    /// ```
+    pub fn resolved_max_local_matrix_elements<T: TreeAciScalar>(&self) -> usize {
+        self.max_local_matrix_elements
+            .unwrap_or_else(|| self.derived_element_ceiling::<T>())
+    }
+
+    /// Element ceiling a run with scalar `T` enforces for one node core.
+    ///
+    /// Returns [`Self::max_core_elements`] when it is set, and the
+    /// budget-derived ceiling otherwise.
+    ///
+    /// # Returns
+    ///
+    /// The ceiling in elements of `T`, reported as `limit` for the
+    /// `core elements` resource.
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// use tensor4all_treeaci::TreeAciOptions;
+    ///
+    /// let mut options = TreeAciOptions::<usize>::default();
+    /// assert_eq!(options.resolved_max_core_elements::<f64>(), 1 << 24);
+    ///
+    /// // Complex runs get the same number of *bytes*, not of elements.
+    /// assert_eq!(
+    ///     options.resolved_max_core_elements::<num_complex::Complex64>(),
+    ///     1 << 23
+    /// );
+    ///
+    /// options.max_core_elements = Some(64);
+    /// assert_eq!(options.resolved_max_core_elements::<f64>(), 64);
+    /// ```
+    pub fn resolved_max_core_elements<T: TreeAciScalar>(&self) -> usize {
+        self.max_core_elements
+            .unwrap_or_else(|| self.derived_element_ceiling::<T>())
+    }
+
+    /// Element ceiling a run with scalar `T` enforces for one cached directed
+    /// frame.
+    ///
+    /// Returns [`Self::max_frame_elements`] when it is set, and the
+    /// budget-derived ceiling otherwise.
+    ///
+    /// # Returns
+    ///
+    /// The ceiling in elements of `T`, reported as `limit` for the
+    /// `frame elements` resource. It bounds one frame; the cache as a whole is
+    /// bounded by [`Self::max_frame_bytes`].
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// use tensor4all_treeaci::TreeAciOptions;
+    ///
+    /// let mut options = TreeAciOptions::<usize>::default();
+    /// assert_eq!(options.resolved_max_frame_elements::<f64>(), 1 << 24);
+    ///
+    /// options.max_working_bytes /= 2;
+    /// assert_eq!(options.resolved_max_frame_elements::<f64>(), 1 << 23);
+    /// ```
+    pub fn resolved_max_frame_elements<T: TreeAciScalar>(&self) -> usize {
+        self.max_frame_elements
+            .unwrap_or_else(|| self.derived_element_ceiling::<T>())
+    }
+
+    /// Elements of `T` one object may claim from the working budget.
+    ///
+    /// The floor of one element keeps a budget smaller than a single scalar
+    /// from deriving a zero ceiling, which would refuse every allocation
+    /// including the ones the prepared minimum needs;
+    /// [`crate::TreeAciError::InvalidOption`] already refuses an explicit zero.
+    fn derived_element_ceiling<T: TreeAciScalar>(&self) -> usize {
+        (self.max_working_bytes / (WORKING_BUDGET_OBJECT_SHARE * size_of::<T>())).max(1)
+    }
+}
+
 #[cfg(test)]
 mod tests {
+    use num_complex::Complex64;
+
     use super::TreeAciOptions;
 
     #[test]
@@ -133,5 +290,84 @@ mod tests {
         let options = TreeAciOptions::<usize>::default();
 
         assert_eq!(options.message_cache_max_bytes, 256 << 20);
+    }
+
+    /// The derived ceilings must reproduce the constants they replaced, so a
+    /// caller who never touches `max_working_bytes` sees no change.
+    #[test]
+    fn default_element_ceilings_match_the_historical_constants() {
+        let options = TreeAciOptions::<usize>::default();
+
+        assert_eq!(options.max_local_matrix_elements, None);
+        assert_eq!(options.max_core_elements, None);
+        assert_eq!(options.max_frame_elements, None);
+        assert_eq!(options.resolved_max_local_matrix_elements::<f64>(), 1 << 24);
+        assert_eq!(options.resolved_max_core_elements::<f64>(), 1 << 24);
+        assert_eq!(options.resolved_max_frame_elements::<f64>(), 1 << 24);
+    }
+
+    /// Issue #729: a caller who raises the byte budget must actually get it.
+    #[test]
+    fn derived_ceilings_follow_the_working_budget() {
+        let options = TreeAciOptions::<usize> {
+            max_working_bytes: 10 << 30,
+            ..TreeAciOptions::default()
+        };
+
+        let expected = (10usize << 30) / 4 / size_of::<f64>();
+        assert_eq!(
+            options.resolved_max_local_matrix_elements::<f64>(),
+            expected
+        );
+        assert_eq!(options.resolved_max_core_elements::<f64>(), expected);
+        assert_eq!(options.resolved_max_frame_elements::<f64>(), expected);
+        // The 17,958,192-element local matrix of the reported failure fits a
+        // 10 GiB budget, which is what the caller asked for.
+        assert!(expected > 17_958_192);
+    }
+
+    /// The ceilings measure bytes, so a complex run gets half the elements and
+    /// the same memory.
+    #[test]
+    fn derived_ceilings_charge_the_run_scalar() {
+        let options = TreeAciOptions::<usize>::default();
+
+        assert_eq!(
+            options.resolved_max_core_elements::<f64>() * size_of::<f64>(),
+            options.resolved_max_core_elements::<Complex64>() * size_of::<Complex64>()
+        );
+    }
+
+    /// An explicit ceiling is a pin: it overrides the budget in both
+    /// directions and does not move when the budget does.
+    #[test]
+    fn explicit_ceilings_override_the_derived_value() {
+        let mut options = TreeAciOptions::<usize> {
+            max_local_matrix_elements: Some(7),
+            max_core_elements: Some(1 << 30),
+            ..TreeAciOptions::default()
+        };
+
+        assert_eq!(options.resolved_max_local_matrix_elements::<f64>(), 7);
+        assert_eq!(options.resolved_max_core_elements::<f64>(), 1 << 30);
+        options.max_working_bytes = 1 << 40;
+        assert_eq!(options.resolved_max_local_matrix_elements::<f64>(), 7);
+        assert_eq!(options.resolved_max_core_elements::<f64>(), 1 << 30);
+        assert_eq!(
+            options.resolved_max_frame_elements::<f64>(),
+            (1usize << 40) / 4 / size_of::<f64>()
+        );
+    }
+
+    /// A budget below one scalar still derives a usable ceiling; the working
+    /// budget itself is what refuses the allocation.
+    #[test]
+    fn derived_ceiling_never_reaches_zero() {
+        let options = TreeAciOptions::<usize> {
+            max_working_bytes: 1,
+            ..TreeAciOptions::default()
+        };
+
+        assert_eq!(options.resolved_max_local_matrix_elements::<f64>(), 1);
     }
 }

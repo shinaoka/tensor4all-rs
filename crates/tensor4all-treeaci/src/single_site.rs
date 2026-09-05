@@ -19,14 +19,14 @@ where
     V: TreeAciNode,
     F: for<'batch> FnMut(TreeElementwiseBatch<'batch, T>, &mut [T]) -> Result<()>,
 {
-    let problem = prepare_problem(inputs, options)?;
+    let problem = prepare_problem::<T, V>(inputs, options)?;
     if problem.node_order.len() != 1 {
         return Err(TreeAciError::InternalInvariant {
             message: "single-site evaluation received a multi-node tree",
         });
     }
     if let Some(guess) = &options.initial_guess {
-        validate_initial_guess::<T, V>(guess, &inputs[0], &problem, options)?;
+        validate_initial_guess::<T, V>(guess, &inputs[0], &problem)?;
     }
     let node = &problem.node_order[0];
     let indices = problem.physical[0].indices.clone();
