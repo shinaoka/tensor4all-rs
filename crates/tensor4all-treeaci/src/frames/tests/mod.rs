@@ -1206,6 +1206,7 @@ fn candidate_batches_reuse_one_oriented_core_for_distinct_candidates() {
                     local_coordinate,
                     incoming: vec![(incoming_edge, incoming_sample)],
                 }],
+                0,
             )
             .unwrap();
     }
@@ -1245,7 +1246,7 @@ fn complex_branch_candidate_batch_preserves_order_and_matches_scalar_frames() {
         .collect::<Vec<_>>();
 
     let packed = frames
-        .candidate_frames_for_edge(&inputs, &problem, 0, edge, &candidates)
+        .candidate_frames_for_edge(&inputs, &problem, 0, edge, &candidates, 0)
         .unwrap();
     let scalar = candidates
         .iter()
@@ -1293,7 +1294,7 @@ fn candidate_frames_for_edge_falls_back_on_a_leaf_edge_with_zero_incoming_edges(
     ];
 
     let dispatched = frames
-        .candidate_frames_for_edge(&inputs, &problem, 0, edge, &candidates)
+        .candidate_frames_for_edge(&inputs, &problem, 0, edge, &candidates, 0)
         .unwrap();
     let scalar = candidates
         .iter()
@@ -1353,7 +1354,7 @@ fn candidate_frames_for_edge_batches_a_branch_edge_with_two_incoming_edges() {
     assert_eq!(candidates.len(), 8);
 
     let dispatched = frames
-        .candidate_frames_for_edge(&inputs, &problem, 0, edge, &candidates)
+        .candidate_frames_for_edge(&inputs, &problem, 0, edge, &candidates, 0)
         .unwrap();
     let scalar = candidates
         .iter()
@@ -1410,7 +1411,7 @@ fn candidate_frames_for_edge_records_frame_diagnostics_with_hub_coordination_num
 
     branch_diagnostics::reset();
     let _dispatched = frames
-        .candidate_frames_for_edge(&inputs, &problem, 0, edge, &candidates)
+        .candidate_frames_for_edge(&inputs, &problem, 0, edge, &candidates, 0)
         .unwrap();
 
     let snapshot = branch_diagnostics::snapshot();
@@ -1507,14 +1508,14 @@ fn two_incoming_candidate_batch_obeys_the_working_byte_limit() {
         }
     }
     let scratch_bytes = frames
-        .enumerated_candidate_frame_scratch_elements(&problem, 0, edge, &candidate_sets)
+        .enumerated_candidate_frame_scratch_elements(&problem, 0, edge, &candidate_sets, 0)
         .unwrap()
         * std::mem::size_of::<f64>();
     assert!(scratch_bytes > 0);
     problem.max_working_bytes = scratch_bytes - 1;
 
     let error = frames
-        .candidate_frames_for_edge(&inputs, &problem, 0, edge, &candidates)
+        .candidate_frames_for_edge(&inputs, &problem, 0, edge, &candidates, 0)
         .unwrap_err();
 
     assert!(matches!(
@@ -1600,7 +1601,7 @@ fn candidate_frames_for_edge_batches_three_incoming_edges() {
 
     super::multi_incoming_debug_stats::reset();
     let dispatched = frames
-        .candidate_frames_for_edge(&inputs, &problem, 0, edge, &candidates)
+        .candidate_frames_for_edge(&inputs, &problem, 0, edge, &candidates, 0)
         .unwrap();
     // The complete cross now takes the generalized batched route; the scalar
     // `candidate_frame` path below stays the differential oracle.
@@ -1697,7 +1698,14 @@ fn batched_duplicate_candidates_are_counted_once_in_the_cache_budget() {
     let retained_before = frames.retained_bytes();
 
     let result = frames
-        .candidate_frames_for_edge(&inputs, &problem, 0, edge, &[candidate.clone(), candidate])
+        .candidate_frames_for_edge(
+            &inputs,
+            &problem,
+            0,
+            edge,
+            &[candidate.clone(), candidate],
+            0,
+        )
         .unwrap();
 
     assert_eq!(result[0], result[1]);
@@ -2487,7 +2495,7 @@ fn branch_point_batched_speedup_vs_scalar_at_realistic_scale() {
     let batched_frames = InputFrameStore::<f64>::from_samples(&inputs, &problem, &arena).unwrap();
     let batched_start = Instant::now();
     let batched = batched_frames
-        .candidate_frames_for_edge(&inputs, &problem, 0, edge, &candidates)
+        .candidate_frames_for_edge(&inputs, &problem, 0, edge, &candidates, 0)
         .unwrap();
     let batched_elapsed = batched_start.elapsed();
 
@@ -2981,7 +2989,7 @@ fn assert_multi_incoming_matches_scalar<T: FixtureScalar>(
 
     super::multi_incoming_debug_stats::reset();
     let packed = frames
-        .candidate_frames_for_edge(&inputs, &problem, 0, edge, &candidates)
+        .candidate_frames_for_edge(&inputs, &problem, 0, edge, &candidates, 0)
         .unwrap();
     let batched_groups = super::multi_incoming_debug_stats::batched_groups();
 
@@ -3079,7 +3087,7 @@ fn multi_incoming_batch_preserves_order_for_duplicate_and_reordered_candidates()
 
     super::multi_incoming_debug_stats::reset();
     let packed = frames
-        .candidate_frames_for_edge(&inputs, &problem, 0, edge, &candidates)
+        .candidate_frames_for_edge(&inputs, &problem, 0, edge, &candidates, 0)
         .unwrap();
     assert!(super::multi_incoming_debug_stats::batched_groups() > 0);
 
@@ -3142,7 +3150,7 @@ fn multi_incoming_batch_falls_back_to_scalar_for_a_sparse_candidate_set() {
 
     super::multi_incoming_debug_stats::reset();
     let packed = frames
-        .candidate_frames_for_edge(&inputs, &problem, 0, edge, &candidates)
+        .candidate_frames_for_edge(&inputs, &problem, 0, edge, &candidates, 0)
         .unwrap();
     assert_eq!(super::multi_incoming_debug_stats::batched_groups(), 0);
     assert_eq!(super::multi_incoming_debug_stats::scalar_groups(), 1);
@@ -3174,7 +3182,7 @@ fn multi_incoming_batch_falls_back_to_scalar_when_the_working_budget_is_tight() 
     let candidates = full_cross_candidates(&problem, &candidate_sets, edge);
 
     let batched_bytes = frames
-        .enumerated_candidate_frame_scratch_elements(&problem, 0, edge, &candidate_sets)
+        .enumerated_candidate_frame_scratch_elements(&problem, 0, edge, &candidate_sets, 0)
         .unwrap()
         * std::mem::size_of::<f64>();
     assert!(batched_bytes > 0);
@@ -3185,7 +3193,7 @@ fn multi_incoming_batch_falls_back_to_scalar_when_the_working_budget_is_tight() 
     // over budget or raising a limit error.
     super::multi_incoming_debug_stats::reset();
     let packed = frames
-        .candidate_frames_for_edge(&inputs, &problem, 0, edge, &candidates)
+        .candidate_frames_for_edge(&inputs, &problem, 0, edge, &candidates, 0)
         .unwrap();
     assert_eq!(super::multi_incoming_debug_stats::batched_groups(), 0);
     assert!(super::multi_incoming_debug_stats::scalar_groups() > 0);
@@ -3204,9 +3212,199 @@ fn multi_incoming_batch_falls_back_to_scalar_when_the_working_budget_is_tight() 
     // The over-budget estimate must also shrink back to the scalar charge, so
     // the local update's pre-flight and the kernel agree on the same route.
     let fallback_elements = frames
-        .enumerated_candidate_frame_scratch_elements(&problem, 0, edge, &candidate_sets)
+        .enumerated_candidate_frame_scratch_elements(&problem, 0, edge, &candidate_sets, 0)
         .unwrap();
     assert!(fallback_elements * std::mem::size_of::<f64>() <= problem.max_working_bytes);
+}
+
+/// Issue #726: the batched route is affordable only relative to what the
+/// caller is already holding, so the same edge, the same candidates, and the
+/// same budget route differently once a reservation is declared -- and the
+/// estimate moves with the kernel, not against it.
+#[test]
+fn multi_incoming_routing_follows_the_caller_reservation() {
+    let inputs = vec![three_incoming_star::<f64>()];
+    let problem = prepare_problem::<f64, _>(&inputs, &TreeAciOptions::default()).unwrap();
+    let edge = hub_edge(&problem, 3);
+    let seeds = vec![
+        vec![0, 0, 0, 0, 0],
+        vec![3, 1, 2, 1, 1],
+        vec![1, 0, 1, 0, 1],
+    ];
+    let (arena, candidate_sets) = SampleArena::from_global_seeds(&problem, &seeds).unwrap();
+    let frames = InputFrameStore::<f64>::from_samples(&inputs, &problem, &arena).unwrap();
+    let candidates = full_cross_candidates(&problem, &candidate_sets, edge);
+
+    let batched_elements = frames
+        .enumerated_candidate_frame_scratch_elements(&problem, 0, edge, &candidate_sets, 0)
+        .unwrap();
+    let batched_bytes = batched_elements * std::mem::size_of::<f64>();
+
+    // Nothing reserved: the whole budget is available and the cross is taken.
+    super::multi_incoming_debug_stats::reset();
+    let unreserved = frames
+        .candidate_frames_for_edge(&inputs, &problem, 0, edge, &candidates, 0)
+        .unwrap();
+    assert!(super::multi_incoming_debug_stats::batched_groups() > 0);
+    assert_eq!(super::multi_incoming_debug_stats::scalar_groups(), 0);
+
+    // Reserve everything but one byte less than the cross needs. The kernel
+    // degrades instead of overrunning the budget, and the estimate reports the
+    // route the kernel will take rather than the one it cannot afford.
+    let reservation = problem.max_working_bytes - batched_bytes + 1;
+    super::multi_incoming_debug_stats::reset();
+    let reserved = frames
+        .candidate_frames_for_edge(&inputs, &problem, 0, edge, &candidates, reservation)
+        .unwrap();
+    assert_eq!(super::multi_incoming_debug_stats::batched_groups(), 0);
+    assert!(super::multi_incoming_debug_stats::scalar_groups() > 0);
+
+    let scalar_elements = frames
+        .enumerated_candidate_frame_scratch_elements(
+            &problem,
+            0,
+            edge,
+            &candidate_sets,
+            reservation,
+        )
+        .unwrap();
+    assert!(
+        scalar_elements < batched_elements,
+        "the degraded charge must be the cheaper one: {scalar_elements} vs {batched_elements}"
+    );
+    assert!(
+        scalar_elements * std::mem::size_of::<f64>() + reservation <= problem.max_working_bytes,
+        "the reported charge must fit the budget that remains"
+    );
+    // Routing is a memory decision, never a numerical one: the two routes
+    // differ only in the order their identical contractions are reduced.
+    assert_eq!(unreserved.candidate_count(), reserved.candidate_count());
+    assert_eq!(unreserved.bond_dim(), reserved.bond_dim());
+    let scale = unreserved
+        .as_col_major_slice()
+        .iter()
+        .fold(0.0f64, |scale, value| scale.max(value.abs()));
+    let residual = unreserved
+        .as_col_major_slice()
+        .iter()
+        .zip(reserved.as_col_major_slice())
+        .fold(0.0f64, |residual, (left, right)| {
+            residual.max((left - right).abs())
+        });
+    assert!(
+        residual <= 1.0e-12 * scale,
+        "the degraded route changed the values: {residual:.3e} against scale {scale:.3e}"
+    );
+}
+
+/// The local update's aggregate pre-flight and the kernel it charges for now
+/// agree on the same route, so a budget that admits the batched cross alone
+/// but not together with the update's own live buffers runs on the scalar
+/// route instead of being refused (#726).
+#[test]
+fn local_update_degrades_instead_of_refusing_an_aggregate_overrun() {
+    let inputs = vec![three_incoming_star::<f64>()];
+    let mut problem = prepare_problem::<f64, _>(&inputs, &TreeAciOptions::default()).unwrap();
+    let edge = hub_edge(&problem, 3);
+    let seeds = vec![
+        vec![0, 0, 0, 0, 0],
+        vec![3, 1, 2, 1, 1],
+        vec![1, 0, 1, 0, 1],
+    ];
+    let (arena, candidate_sets) = SampleArena::from_global_seeds(&problem, &seeds).unwrap();
+    let frames = InputFrameStore::<f64>::from_samples(&inputs, &problem, &arena).unwrap();
+    let options = TreeAciOptions::default();
+    let mut square = |batch: crate::TreeElementwiseBatch<'_, f64>, output: &mut [f64]| {
+        for (point, value) in output.iter_mut().enumerate() {
+            let value_at_point = batch.get(0, point)?;
+            *value = value_at_point * value_at_point;
+        }
+        Ok(())
+    };
+
+    let generous = crate::local_update::materialize_and_factor_edge(
+        &inputs,
+        &problem,
+        &candidate_sets,
+        &frames,
+        edge,
+        &options,
+        true,
+        &mut square,
+    )
+    .expect("the default budget admits this edge");
+
+    // The exact window: the batched cross fits `max_working_bytes` on its own,
+    // and does not fit once the update's own buffers are counted. Before #726
+    // this configuration was refused with a typed limit error even though the
+    // scalar route was affordable.
+    let reserved_bytes = crate::local_update::reserved_working_bytes::<f64>(
+        inputs.len() * generous.row_count * generous.col_count,
+        generous.row_count * generous.col_count,
+        generous.row_count,
+        generous.col_count,
+        (0..inputs.len())
+            .map(|input| frames.bond_dim(input, edge).unwrap())
+            .max()
+            .unwrap(),
+    )
+    .unwrap();
+    let batched_bytes = (0..inputs.len())
+        .map(|input| {
+            frames
+                .enumerated_candidate_frame_scratch_elements(
+                    &problem,
+                    input,
+                    edge,
+                    &candidate_sets,
+                    0,
+                )
+                .unwrap()
+        })
+        .max()
+        .unwrap()
+        * std::mem::size_of::<f64>();
+    assert!(reserved_bytes > 0);
+    problem.max_working_bytes = reserved_bytes + batched_bytes - 1;
+    assert!(
+        batched_bytes <= problem.max_working_bytes,
+        "the batched cross must still fit the budget on its own"
+    );
+
+    super::multi_incoming_debug_stats::reset();
+    let degraded = crate::local_update::materialize_and_factor_edge(
+        &inputs,
+        &problem,
+        &candidate_sets,
+        &frames,
+        edge,
+        &options,
+        true,
+        &mut square,
+    )
+    .expect("an affordable scalar route must not be refused");
+    assert_eq!(super::multi_incoming_debug_stats::batched_groups(), 0);
+    assert!(super::multi_incoming_debug_stats::scalar_groups() > 0);
+    assert_eq!(degraded.row_count, generous.row_count);
+    assert_eq!(degraded.col_count, generous.col_count);
+    assert_eq!(degraded.pivot_errors.len(), generous.pivot_errors.len());
+    // The two routes contract the same numbers in a different order, so they
+    // agree to rounding rather than bit for bit.
+    let scale = generous
+        .local_values
+        .iter()
+        .fold(0.0f64, |scale, value| scale.max(value.abs()));
+    let residual = degraded
+        .local_values
+        .iter()
+        .zip(&generous.local_values)
+        .fold(0.0f64, |residual, (left, right)| {
+            residual.max((left - right).abs())
+        });
+    assert!(
+        residual <= 1.0e-12 * scale,
+        "the degraded route changed the local matrix: {residual:.3e} against scale {scale:.3e}"
+    );
 }
 
 #[test]
@@ -3227,7 +3425,7 @@ fn multi_incoming_batch_is_deterministic_and_never_caches_candidates() {
     for _ in 0..3 {
         super::candidate_debug_stats::reset();
         let packed = frames
-            .candidate_frames_for_edge(&inputs, &problem, 0, edge, &candidates)
+            .candidate_frames_for_edge(&inputs, &problem, 0, edge, &candidates, 0)
             .unwrap();
         // Three-or-more-incoming candidates are deliberately not cached: the
         // repeat runs must keep missing, exactly as the scalar route did.
@@ -3562,7 +3760,7 @@ fn measure_three_incoming_case(m: usize, d: usize) {
         super::multi_incoming_debug_stats::reset();
         let started = Instant::now();
         let batched = batched_frames
-            .candidate_frames_for_edge(&inputs, &problem, 0, edge, &candidates)
+            .candidate_frames_for_edge(&inputs, &problem, 0, edge, &candidates, 0)
             .unwrap();
         batched_times.push(started.elapsed());
         assert!(super::multi_incoming_debug_stats::batched_groups() > 0);
@@ -3717,7 +3915,7 @@ fn measure_candidate_product_accounting(
     super::debug_stats::reset();
     super::multi_incoming_debug_stats::reset();
     let batched = batched_frames
-        .candidate_frames_for_edge(&inputs, &problem, 0, edge, &candidates)
+        .candidate_frames_for_edge(&inputs, &problem, 0, edge, &candidates, 0)
         .unwrap();
     let batched_core_reads = super::debug_stats::core_element_reads();
     assert_eq!(

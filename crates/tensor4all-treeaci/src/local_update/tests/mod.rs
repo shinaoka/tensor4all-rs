@@ -474,7 +474,7 @@ fn candidate_frames_batched_path_matches_scalar_path_on_a_chain() {
     let frames_batched =
         InputFrameStore::<f64>::from_samples(&inputs, &problem, &arena_for_batched).unwrap();
     let batched = frames_batched
-        .candidate_frames_for_edge(&inputs, &problem, 0, edge, &row_candidates)
+        .candidate_frames_for_edge(&inputs, &problem, 0, edge, &row_candidates, 0)
         .unwrap();
 
     // The scalar oracle: a second, independently built store, walked one
