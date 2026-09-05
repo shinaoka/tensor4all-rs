@@ -49,6 +49,66 @@ fn src_error_estimate_rejects_singular_and_non_square_r() {
     let non_square = Matrix::from_col_major_vec(2, 3, vec![1.0_f64, 0.0, 0.0, 1.0, 0.0, 0.0]);
     let shape_error = src_error_estimate(&non_square).unwrap_err();
     assert!(shape_error.to_string().contains("square"));
+
+    let non_triangular = Matrix::from_col_major_vec(2, 2, vec![1.0_f64, 1.0, 0.0, 1.0]);
+    let triangular_error = src_error_estimate(&non_triangular).unwrap_err();
+    assert!(triangular_error.to_string().contains("upper-triangular"));
+}
+
+#[test]
+fn src_error_estimate_general_accepts_column_restored_factors() {
+    let triangular = Matrix::from_col_major_vec(2, 2, vec![2.0_f64, 0.0, 1.0, 3.0]);
+    let restored = Matrix::from_col_major_vec(2, 2, vec![1.0_f64, 3.0, 2.0, 0.0]);
+    let expected = src_error_estimate(&triangular).unwrap();
+    let actual = src_error_estimate_general(&restored).unwrap();
+    assert!((actual.error - expected.error).abs() < 1.0e-12);
+    assert!((actual.norm - expected.norm).abs() < 1.0e-12);
+
+    let triangular_complex = Matrix::from_col_major_vec(
+        2,
+        2,
+        vec![
+            Complex64::new(2.0, 0.0),
+            Complex64::zero(),
+            Complex64::new(1.0, 2.0),
+            Complex64::new(3.0, -1.0),
+        ],
+    );
+    let restored_complex = Matrix::from_col_major_vec(
+        2,
+        2,
+        vec![
+            Complex64::new(1.0, 2.0),
+            Complex64::new(3.0, -1.0),
+            Complex64::new(2.0, 0.0),
+            Complex64::zero(),
+        ],
+    );
+    let expected = src_error_estimate(&triangular_complex).unwrap();
+    let actual = src_error_estimate_general(&restored_complex).unwrap();
+    assert!((actual.error - expected.error).abs() < 1.0e-12);
+    assert!((actual.norm - expected.norm).abs() < 1.0e-12);
+}
+
+#[test]
+fn src_error_estimate_general_rejects_invalid_factors() {
+    let empty = Matrix::<f64>::zeros(0, 0);
+    assert!(src_error_estimate_general(&empty)
+        .unwrap_err()
+        .to_string()
+        .contains("non-empty"));
+    let non_square = Matrix::from_col_major_vec(1, 2, vec![1.0_f64, 2.0]);
+    assert!(src_error_estimate_general(&non_square)
+        .unwrap_err()
+        .to_string()
+        .contains("square"));
+    let singular = Matrix::from_col_major_vec(2, 2, vec![1.0_f64, 2.0, 2.0, 4.0]);
+    assert!(src_error_estimate_general(&singular).is_err());
+    let non_finite = Matrix::from_col_major_vec(1, 1, vec![f64::NAN]);
+    assert!(src_error_estimate_general(&non_finite)
+        .unwrap_err()
+        .to_string()
+        .contains("finite"));
 }
 
 #[test]

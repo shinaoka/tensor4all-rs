@@ -386,6 +386,118 @@ fn probe_cuda_incremental_probe_batch_drops_dependent_columns() {
 }
 
 #[test]
+fn probe_cuda_rrqr_drops_interspersed_dependence_and_restores_column_order() {
+    use tensor4all_core::{
+        DynIndex, ExecutionContext, IdxTensor, TensorContractionLike, TensorFactorizationLike,
+    };
+
+    let cuda = Arc::new(CudaExecutionContext::new().unwrap());
+    let context = ExecutionContext::Cuda(Arc::clone(&cuda));
+    let row = DynIndex::new_dyn(4);
+    let batch = DynIndex::new_dyn(5);
+    let values = vec![
+        1.0_f64, 0.0, 0.0, 0.0, // independent
+        0.0, 1.0, 0.0, 0.0, // independent
+        2.0, 0.0, 0.0, 0.0, // interspersed dependence
+        0.0, 0.0, 1.0, 0.0, // independent after dependence
+        1.0, 1.0, 1.0, 0.0, // dependent combination
+    ];
+    let host = IdxTensor::from_dense(vec![row.clone(), batch.clone()], values.clone()).unwrap();
+    let resident = host.upload_cuda(&cuda).unwrap();
+    let factor = IdxTensor::factorize_probe_batch_incremental_in(
+        None,
+        &resident,
+        &batch,
+        std::slice::from_ref(&row),
+        &context,
+    )
+    .unwrap();
+
+    assert_eq!(factor.rank, 3);
+    factor.left.validate_context(&context).unwrap();
+    factor.right.validate_context(&context).unwrap();
+    let reconstructed = factor
+        .left
+        .contract_pair(&factor.right)
+        .unwrap()
+        .download(&cuda)
+        .unwrap();
+    let got = reconstructed.to_vec::<f64>().unwrap();
+    let residual = got
+        .iter()
+        .zip(&values)
+        .map(|(actual, expected)| (actual - expected).abs())
+        .fold(0.0_f64, f64::max);
+    assert!(residual < 1.0e-9, "CUDA RRQR residual {residual}");
+}
+
+#[test]
+fn probe_cuda_complex_rrqr_supports_adaptive_square_estimator() {
+    use num_complex::Complex64;
+    use tensor4all_core::{
+        DynIndex, ExecutionContext, IdxTensor, TensorContractionLike, TensorFactorizationLike,
+    };
+
+    let cuda = Arc::new(CudaExecutionContext::new().unwrap());
+    let context = ExecutionContext::Cuda(Arc::clone(&cuda));
+    let row = DynIndex::new_dyn(3);
+    let batch = DynIndex::new_dyn(3);
+    let values = vec![
+        Complex64::new(1.0, 1.0),
+        Complex64::new(0.0, 0.0),
+        Complex64::new(0.0, 0.0),
+        Complex64::new(0.0, 0.0),
+        Complex64::new(4.0, -1.0),
+        Complex64::new(0.0, 0.0),
+        Complex64::new(0.5, 0.0),
+        Complex64::new(0.25, 0.5),
+        Complex64::new(2.0, 0.0),
+    ];
+    let host = IdxTensor::from_dense(vec![row.clone(), batch.clone()], values.clone()).unwrap();
+    let resident = host.upload_cuda(&cuda).unwrap();
+    let factor = IdxTensor::factorize_probe_batch_incremental_in(
+        None,
+        &resident,
+        &batch,
+        std::slice::from_ref(&row),
+        &context,
+    )
+    .unwrap();
+
+    assert_eq!(factor.rank, 3);
+    let reconstructed = factor
+        .left
+        .contract_pair(&factor.right)
+        .unwrap()
+        .download(&cuda)
+        .unwrap();
+    let got = reconstructed.to_vec::<Complex64>().unwrap();
+    let residual = got
+        .iter()
+        .zip(&values)
+        .map(|(actual, expected)| (*actual - *expected).norm())
+        .fold(0.0_f64, f64::max);
+    assert!(residual < 1.0e-9, "CUDA complex RRQR residual {residual}");
+    let estimate = factor.right.src_error_estimate_in(&context).unwrap();
+    let cpu = ExecutionContext::Cpu(Arc::new(
+        tensor4all_tensorbackend::CpuExecutionContext::from_backend(tenferro_cpu::CpuBackend::new()),
+    ));
+    let cpu_sketch =
+        IdxTensor::from_dense_in(&cpu, vec![row.clone(), batch.clone()], values).unwrap();
+    let cpu_factor = IdxTensor::factorize_probe_batch_incremental_in(
+        None,
+        &cpu_sketch,
+        &batch,
+        std::slice::from_ref(&row),
+        &cpu,
+    )
+    .unwrap();
+    let expected = cpu_factor.right.src_error_estimate_in(&cpu).unwrap();
+    assert!((estimate.error - expected.error).abs() < 1.0e-10);
+    assert!((estimate.norm - expected.norm).abs() < 1.0e-10);
+}
+
+#[test]
 fn cuda_scale_and_norm_in_match_cpu() {
     use tensor4all_core::{DynIndex, ExecutionContext, IdxTensor};
 

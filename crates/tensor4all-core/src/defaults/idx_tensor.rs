@@ -19,14 +19,17 @@ use tenferro::{
 };
 use tenferro_ad::{extension::adopt_untracked_eager_value, EagerRuntime, EagerTensor};
 use tenferro_einsum::{EagerEinsumExt, EinsumSubscripts};
-use tenferro_linalg::EagerTensorLinalgExt;
+use tenferro_linalg::{EagerTensorLinalgExt, RankRevealingQrOptions};
 use tensor4all_tensorbackend::{
     contract_native_tensor, default_eager_ctx, dense_native_tensor_from_col_major,
     dense_native_tensor_from_col_major_owned, diag_native_tensor_from_col_major,
     native_tensor_primal_to_diag, storage_payload_native_read_input, storage_to_native_tensor,
     ExecutionContext, NativeTensorReadInput, TensorElement,
 };
-use tensor4all_tensorbackend::{src_error_estimate as backend_src_error_estimate, Matrix};
+use tensor4all_tensorbackend::{
+    src_error_estimate as backend_src_error_estimate,
+    src_error_estimate_general as backend_src_error_estimate_general, Matrix,
+};
 use tensor4all_tensorbackend::{IncrementalQr, IncrementalQrScalar};
 use tensor4all_tensorbackend::{Storage, StorageKind};
 
@@ -5881,29 +5884,61 @@ impl TensorFactorizationLike for IdxTensor {
         if matches!(context, ExecutionContext::Cuda(_)) {
             return self.resident_src_error_estimate(context);
         }
-        #[cfg(not(feature = "tenferro-cuda"))]
-        let _ = context;
-        TensorFactorizationLike::src_error_estimate(self)
+        if context.is_global_default_cpu() {
+            return TensorFactorizationLike::src_error_estimate(self);
+        }
+        self.host_src_error_estimate_general()
     }
 }
 
 impl IdxTensor {
-    /// Resident batch-native probe factorization by full thin-QR recompute.
+    /// Evaluate the SRC estimator for an explicit CPU context's restored factor.
+    fn host_src_error_estimate_general(
+        &self,
+    ) -> std::result::Result<tensor4all_tensorbackend::SrcErrorEstimate, FactorizeError> {
+        let indices = self.indices();
+        if indices.len() != 2 {
+            return Err(FactorizeError::ComputationError(anyhow::anyhow!(
+                "SRC QR factor must have rank 2, got {}",
+                indices.len()
+            )));
+        }
+        let nrows = indices[0].dim();
+        let ncols = indices[1].dim();
+        let result = if self.is_f64() {
+            let matrix = Matrix::from_col_major_vec(
+                nrows,
+                ncols,
+                self.to_vec::<f64>()
+                    .map_err(|error| FactorizeError::ComputationError(anyhow::Error::new(error)))?,
+            );
+            backend_src_error_estimate_general(&matrix)
+        } else if self.is_c64() {
+            let matrix = Matrix::from_col_major_vec(
+                nrows,
+                ncols,
+                self.to_vec::<Complex64>()
+                    .map_err(|error| FactorizeError::ComputationError(anyhow::Error::new(error)))?,
+            );
+            backend_src_error_estimate_general(&matrix)
+        } else {
+            return Err(FactorizeError::UnsupportedStorage(
+                "SRC adaptive estimation currently supports f64 and Complex64 QR factors",
+            ));
+        };
+        result.map_err(|error| FactorizeError::ComputationError(anyhow::anyhow!(error)))
+    }
+
+    /// Resident batch-native probe factorization by full RRQR recompute.
     ///
     /// Reconstructs the full sketch block `[Q_prev R_prev, A_new]` with resident
-    /// matmul/concatenation and runs one thin QR in the owning runtime. This
-    /// replaces the host `IncrementalQr` block update without any host
-    /// round-trip: no `IncrementalQrState` is stored, so the adaptive estimator
-    /// solves the full triangular system at each growth step. The recomputed
-    /// factor spans the same column space as the incremental update.
-    ///
-    /// Unlike the host block update, this recompute is not rank-revealing:
-    /// linearly dependent appended columns are retained, so a rank-deficient
-    /// (but not row-saturated) block reports a larger rank than the host path
-    /// and a square R where the host path yields a non-square one. Appended
-    /// SRC probe blocks are iid random draws, for which dependence is
-    /// measure-zero; a device-side rank guard plus a dependent-block test is a
-    /// tracked follow-up, not part of this primitive.
+    /// matmul/concatenation and runs column-pivoted rank-revealing QR in the
+    /// owning runtime. Only the scalar rank metadata is explicitly read back;
+    /// matrix payloads and permutation metadata remain resident. The returned
+    /// right factor is projected back into original sketch-column order, so
+    /// `left * right` reconstructs the unpermuted sketch. Since that right
+    /// factor is not generally triangular, the adaptive estimator uses a
+    /// general solve of the small square sketch factor.
     fn resident_probe_batch_qr(
         previous: Option<&FactorizeResult<IdxTensor>>,
         batch_tensor: &IdxTensor,
@@ -5969,56 +6004,45 @@ impl IdxTensor {
                 "resident sketch factor is not rank-2"
             ))
         })?;
-        let (q_full, r_full) = full_inner.qr().map_err(|error| {
-            FactorizeError::ComputationError(
-                anyhow::Error::new(error).context("resident probe batch QR failed"),
-            )
-        })?;
-        let full_rank = q_full.shape().get(1).copied().ok_or_else(|| {
-            FactorizeError::ComputationError(anyhow::anyhow!(
-                "resident probe batch Q factor is not rank-2"
-            ))
-        })?;
-        let appended_norm = batch_tensor
-            .norm_in(context)
-            .map_err(|error| FactorizeError::ComputationError(anyhow::Error::new(error)))?;
-        let tolerance = 32.0 * f64::EPSILON * m.max(b) as f64 * appended_norm.max(1.0);
-        let mut rank = 0;
-        for diagonal in 0..full_rank {
-            let scalar = r_full
-                .slice_axis(0, diagonal..diagonal + 1)
-                .and_then(|value| value.slice_axis(1, diagonal..diagonal + 1))
-                .and_then(|value| value.reshape(&[1]))
-                .map_err(|error| {
-                    FactorizeError::ComputationError(
-                        anyhow::Error::new(error).context("resident QR rank guard failed"),
-                    )
-                })?;
-            let scalar = Self::from_inner(vec![DynIndex::new_dyn(1)], scalar)
-                .map_err(FactorizeError::ComputationError)?;
-            let value = scalar
-                .read_decision_data(context)
-                .map_err(|error| FactorizeError::ComputationError(anyhow::Error::new(error)))?[0]
-                .abs();
-            if !value.is_finite() || value <= tolerance {
-                break;
-            }
-            rank += 1;
+        let rank_tolerance = 32.0 * f64::EPSILON * m.max(total_width) as f64;
+        let decomposition = full_inner
+            .rank_revealing_qr(RankRevealingQrOptions::default().rtol(rank_tolerance))
+            .map_err(|error| {
+                FactorizeError::ComputationError(
+                    anyhow::Error::new(error).context("resident probe batch RRQR failed"),
+                )
+            })?;
+        let rank = Self::read_resident_rank(&decomposition.rank, context)?;
+        let maximum_rank = m.min(total_width);
+        if rank > maximum_rank {
+            return Err(FactorizeError::ComputationError(anyhow::anyhow!(
+                "resident RRQR returned rank {rank}, exceeding maximum {maximum_rank}"
+            )));
         }
         if let Some(previous) = previous {
             if rank < previous.rank {
                 return Err(FactorizeError::ComputationError(anyhow::anyhow!(
-                    "resident SRC QR rank decreased from {} to {rank}",
+                    "resident SRC RRQR rank decreased from {} to {rank}",
                     previous.rank
                 )));
             }
         }
-        let q_full = q_full
+        let q_full = decomposition
+            .q
             .slice_axis(1, 0..rank)
             .map_err(|error| FactorizeError::ComputationError(anyhow::Error::new(error)))?;
-        let r_full = r_full
-            .slice_axis(0, 0..rank)
+        // RRQR factors the pivoted sketch A[:, permutation]. Restore the
+        // original sketch-column order without reading permutation metadata:
+        // Q_rank^H A computes the equivalent right factor entirely resident.
+        let q_adjoint = q_full
+            .transpose(&[1, 0])
+            .and_then(|transposed| transposed.conj())
             .map_err(|error| FactorizeError::ComputationError(anyhow::Error::new(error)))?;
+        let r_full = q_adjoint.matmul(&full_inner).map_err(|error| {
+            FactorizeError::ComputationError(
+                anyhow::Error::new(error).context("resident RRQR right-factor restoration failed"),
+            )
+        })?;
         let cap = DynIndex::new_bond(rank)
             .map_err(|error| FactorizeError::ComputationError(anyhow::Error::new(error)))?;
         let batch = DynIndex::new_link(total_width)
@@ -6089,21 +6113,19 @@ impl IdxTensor {
                 "SRC device estimator requires a CUDA execution context"
             )));
         };
-        // Adjoint R^H of the upper-triangular R is lower-triangular.
+        // RRQR restores original sketch-column order, so the factor is square
+        // but not generally triangular. Solve its adjoint as a general system.
         let adjoint = inner
             .transpose(&[1, 0])
             .and_then(|transposed| transposed.conj())
             .map_err(|error| FactorizeError::ComputationError(anyhow::Error::new(error)))?;
         let identity = Self::resident_identity(cuda, nrows, inner.dtype())?;
-        // Solve R^H X = I for X = R^{-†}.
-        let solved = adjoint
-            .triangular_solve(&identity, true, true, false, false)
-            .map_err(|error| {
-                FactorizeError::ComputationError(
-                    anyhow::Error::new(error)
-                        .context("SRC inverse-adjoint triangular solve failed"),
-                )
-            })?;
+        // Solve F^H X = I for X = F^{-†}.
+        let solved = adjoint.solve(&identity).map_err(|error| {
+            FactorizeError::ComputationError(
+                anyhow::Error::new(error).context("SRC inverse-adjoint general solve failed"),
+            )
+        })?;
         let column_sums = solved
             .abs()
             .and_then(|magnitudes| magnitudes.reduce_sum_squares(&[0]))
@@ -6118,6 +6140,52 @@ impl IdxTensor {
         Self::src_estimate_from_decision_scalars(&column_norms_sq, total_norm_sq[0], ncols)
             .map(|(error, norm)| SrcErrorEstimate { error, norm })
             .map_err(FactorizeError::ComputationError)
+    }
+
+    /// Read the scalar integer rank returned by RRQR through its owning context.
+    fn read_resident_rank(
+        rank: &EagerTensor,
+        context: &ExecutionContext,
+    ) -> std::result::Result<usize, FactorizeError> {
+        if !rank.shape().is_empty() {
+            return Err(FactorizeError::ComputationError(anyhow::anyhow!(
+                "resident RRQR rank metadata has shape {:?}, expected []",
+                rank.shape()
+            )));
+        }
+        let resident = rank.to_tensor().map_err(|error| {
+            FactorizeError::ComputationError(
+                anyhow::Error::new(error).context("resident RRQR rank materialization failed"),
+            )
+        })?;
+        #[cfg(feature = "tenferro-cuda")]
+        let host = match context {
+            ExecutionContext::Cpu(_) => resident,
+            ExecutionContext::Cuda(cuda) => cuda.download(&resident).map_err(|error| {
+                FactorizeError::ComputationError(
+                    anyhow::Error::new(error).context("resident RRQR rank download failed"),
+                )
+            })?,
+        };
+        #[cfg(not(feature = "tenferro-cuda"))]
+        let host = match context {
+            ExecutionContext::Cpu(_) => resident,
+        };
+        let values = host.as_slice::<i64>().map_err(|error| {
+            FactorizeError::ComputationError(
+                anyhow::Error::new(error).context("resident RRQR rank decode failed"),
+            )
+        })?;
+        let value = *values.first().ok_or_else(|| {
+            FactorizeError::ComputationError(anyhow::anyhow!(
+                "resident RRQR rank metadata is empty"
+            ))
+        })?;
+        usize::try_from(value).map_err(|error| {
+            FactorizeError::ComputationError(
+                anyhow::Error::new(error).context("resident RRQR rank is negative"),
+            )
+        })
     }
 
     /// Build an `n x n` identity in the operand's owning runtime.

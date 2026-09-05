@@ -399,7 +399,7 @@ fn cuda_src_rejects_mixed_and_foreign_inputs() {
 
 #[test]
 #[ignore]
-fn cuda_src_c64_fixed_chain_probe() {
+fn cuda_src_c64_fixed_and_adaptive_chain_probe() {
     use num_complex::Complex64;
 
     let (cuda, context) = cuda_context();
@@ -437,50 +437,62 @@ fn cuda_src_c64_fixed_chain_probe() {
     let tn_b = build(&[bond_b], &output_b, 2.0);
     let resident_a = tn_a.upload_cuda(&cuda).unwrap();
     let resident_b = tn_b.upload_cuda(&cuda).unwrap();
-    let options = ContractionOptions::src()
-        .with_max_bond_dim(4)
-        .with_src_options(SrcOptions::fixed());
-    let mut rng = ChaCha8Rng::seed_from_u64(29);
-    let result = contract_src_with_rng_in(
-        &resident_a,
-        &resident_b,
-        &"B".to_string(),
-        options.clone(),
-        &mut rng,
-        &context,
-    );
-    match result {
-        Ok(result) => {
-            result.validate_context(&context).unwrap();
-            let cpu_a = scoped_cpu_copy(&tn_a, &cpu);
-            let cpu_b = scoped_cpu_copy(&tn_b, &cpu);
-            let mut cpu_rng = ChaCha8Rng::seed_from_u64(29);
-            let reference = contract_src_with_rng_in(
-                &cpu_a,
-                &cpu_b,
-                &"B".to_string(),
-                options,
-                &mut cpu_rng,
-                &cpu,
-            )
-            .unwrap();
-            let got_dense = result.download(&cuda).unwrap().to_dense().unwrap();
-            let want_dense = reference.to_dense().unwrap();
-            let got_dense = got_dense.permuteinds(want_dense.indices()).unwrap();
-            let got: Vec<Complex64> = got_dense.to_vec().unwrap();
-            let want: Vec<Complex64> = want_dense.to_vec().unwrap();
-            assert_eq!(got.len(), want.len());
-            let residual = got
-                .iter()
-                .zip(want.iter())
-                .map(|(a, b)| (a - b).norm())
-                .fold(0.0_f64, f64::max);
-            println!("C64 chain CUDA/CPU parity residual: {residual:e}");
-            assert!(residual < 1e-9, "C64 parity residual {residual}");
-        }
-        Err(error) => {
-            panic!("C64 fixed CUDA SRC must be supported, got typed error: {error:?}");
-        }
+    for (mode, options, seed) in [
+        (
+            "fixed",
+            ContractionOptions::src()
+                .with_max_bond_dim(4)
+                .with_src_options(SrcOptions::fixed()),
+            29_u64,
+        ),
+        (
+            "adaptive",
+            ContractionOptions::src()
+                .with_max_bond_dim(4)
+                .with_src_options(
+                    SrcOptions::adaptive(1.0e-8, 4)
+                        .with_min_rank(1)
+                        .with_rank_increment(2),
+                ),
+            31_u64,
+        ),
+    ] {
+        let mut rng = ChaCha8Rng::seed_from_u64(seed);
+        let result = contract_src_with_rng_in(
+            &resident_a,
+            &resident_b,
+            &"B".to_string(),
+            options.clone(),
+            &mut rng,
+            &context,
+        )
+        .unwrap_or_else(|error| panic!("C64 {mode} CUDA SRC failed: {error:?}"));
+        result.validate_context(&context).unwrap();
+        let cpu_a = scoped_cpu_copy(&tn_a, &cpu);
+        let cpu_b = scoped_cpu_copy(&tn_b, &cpu);
+        let mut cpu_rng = ChaCha8Rng::seed_from_u64(seed);
+        let reference = contract_src_with_rng_in(
+            &cpu_a,
+            &cpu_b,
+            &"B".to_string(),
+            options,
+            &mut cpu_rng,
+            &cpu,
+        )
+        .unwrap_or_else(|error| panic!("C64 {mode} CPU SRC failed: {error:?}"));
+        let got_dense = result.download(&cuda).unwrap().to_dense().unwrap();
+        let want_dense = reference.to_dense().unwrap();
+        let got_dense = got_dense.permuteinds(want_dense.indices()).unwrap();
+        let got: Vec<Complex64> = got_dense.to_vec().unwrap();
+        let want: Vec<Complex64> = want_dense.to_vec().unwrap();
+        assert_eq!(got.len(), want.len());
+        let residual = got
+            .iter()
+            .zip(want.iter())
+            .map(|(a, b)| (a - b).norm())
+            .fold(0.0_f64, f64::max);
+        println!("C64 {mode} chain CUDA/CPU parity residual: {residual:e}");
+        assert!(residual < 1e-8, "C64 {mode} parity residual {residual}");
     }
 }
 
