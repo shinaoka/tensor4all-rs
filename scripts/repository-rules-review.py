@@ -37,6 +37,7 @@ from typing import Any
 
 ROOT = Path(__file__).resolve().parents[1]
 RULES_PATH = ROOT / "REPOSITORY_RULES.md"
+TIPS_PATH = ROOT / "PERFORMANCE_TIPS.md"
 PROMPT_PATH = ROOT / "ai" / "prompts" / "repository-rules-review.md"
 PROMPT_VERSION = "1"
 DEFAULT_MODEL = "deepseek-v4-pro"
@@ -159,7 +160,20 @@ ALWAYS_SECTIONS = frozenset(
 # Synchronization" is a git-workflow protocol -- nothing inside a diff can
 # satisfy or violate it, so showing it to a diff-scoped reviewer only invites
 # invented findings.
-HUMAN_ONLY_SECTIONS = frozenset({"Base Branch Synchronization"})
+# "Audit procedure" (PERFORMANCE_TIPS.md) instructs the auditor; a diff cannot
+# violate it.
+HUMAN_ONLY_SECTIONS = frozenset({"Base Branch Synchronization", "Audit procedure"})
+
+PERFORMANCE_SECTIONS = (
+    "Pointwise TT Readout In A Loop",
+    "Uncached Target Function Across Sweeps",
+    "Wrapper That Disables Batching",
+    "Full Quantics Grid Sweeps",
+    "Per-Call Reconstruction Inside Loops",
+    "Owned Vector Cache Keys",
+    "Silent Slow-Path Fallback",
+    "Unpinned Timing Claims",
+)
 
 SECTION_TRIGGERS: tuple[tuple[re.Pattern[str], frozenset[str]], ...] = (
     (
@@ -212,6 +226,15 @@ SECTION_TRIGGERS: tuple[tuple[re.Pattern[str], frozenset[str]], ...] = (
                 "Tensor Network Test Comparisons",
             }
         ),
+    ),
+    # PERFORMANCE_TIPS.md sections: TT evaluation, TCI, caches, contraction.
+    (
+        re.compile(
+            r"tensor4all-(?:tensorci|treetci|quanticstci|aci|treeaci|simplett"
+            r"|treetn|partitionedtt|partitionedtreetn)|evaluat|cache|contract"
+            r"|benchmarks/"
+        ),
+        frozenset(PERFORMANCE_SECTIONS),
     ),
     (
         re.compile(
@@ -453,8 +476,10 @@ def configure_dotenv(*, explicit: Path | None, skip: bool) -> None:
     load_dotenv(path, override=False)
 
 
-def parse_repository_rules_sections(path: Path = RULES_PATH) -> dict[str, str]:
-    text = path.read_text(encoding="utf-8")
+def parse_repository_rules_sections(
+    paths: tuple[Path, ...] = (RULES_PATH, TIPS_PATH),
+) -> dict[str, str]:
+    text = "\n".join(path.read_text(encoding="utf-8") for path in paths)
     sections: dict[str, str] = {}
     current_title: str | None = None
     current_lines: list[str] = []
@@ -1508,9 +1533,10 @@ def main(argv: list[str] | None = None) -> int:
 
     configure_dotenv(explicit=args.dotenv, skip=args.no_dotenv)
 
-    if not RULES_PATH.is_file():
-        print(f"Missing rules file: {RULES_PATH}", file=sys.stderr)
-        return 1
+    for rules_path in (RULES_PATH, TIPS_PATH):
+        if not rules_path.is_file():
+            print(f"Missing rules file: {rules_path}", file=sys.stderr)
+            return 1
     if not PROMPT_PATH.is_file():
         print(f"Missing prompt file: {PROMPT_PATH}", file=sys.stderr)
         return 1

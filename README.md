@@ -79,6 +79,8 @@ validated in CI. Longer runnable examples live in the
 
 A portable [Agent Skill](skills/use-tensor4all-rs/SKILL.md) teaches compatible
 coding agents the crate map, common workflows, and tensor4all-rs conventions.
+The companion [`audit-performance`](skills/audit-performance/SKILL.md) skill
+runs the static performance audit defined in `PERFORMANCE_TIPS.md`.
 Install and update it with:
 
 ```bash
