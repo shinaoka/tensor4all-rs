@@ -1,5 +1,9 @@
 # TreeACI Branch-Point Diagnostics Implementation Plan
 
+Historical implementation record. Issue #732 supersedes the diagnostic API,
+node keys and timing semantics below; see [the current design](../../design/tree-aci.md)
+and [the release experiment](../../../benchmarks/README.md).
+
 > **For agentic workers:** REQUIRED SUB-SKILL: Use superpowers:subagent-driven-development (recommended) or superpowers:executing-plans to implement this plan task-by-task. Steps use checkbox (`- [ ]`) syntax for tracking.
 
 **Goal:** Add a `diagnostics` Cargo feature to `tensor4all-treetn` and `tensor4all-treeaci` that reports, per tree node, coordination number, incident bond dimensions, Guard vs. LUCI/frame timing, and cache hit/miss counts -- with zero generated code when the feature is off.

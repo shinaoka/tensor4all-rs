@@ -115,3 +115,48 @@ Public-surface audit: README's experimental TreeACI claim remains accurate;
 the shipped usage-skill references and live tutorials have no references to the
 changed diagnostic signatures. Updated the design reference and benchmark
 entry point; no tutorial numerical API changed.
+
+## Measured result
+
+Implementation commit: `f4c9479`. Both predeclared candidate experiments
+completed with zero validity failures and no reruns. Production off/off paired
+ratio median across 120 cases was 1.00139; the 432-case instrumented comparison
+showed median observer ratios 1.03758 (ACI), 1.20282 (cold query), and 1.19805
+(warm query). Maximum full-study relative numerical error was `2.30e-12`.
+These are descriptive, not timing gates or a speedup claim.
+
+At equal S=512, d=2 and caller batch 32, cold hub-message time was comparable
+across degree, while ACI frame cost increased substantially. For input 0,
+degree-3/4 frames spent approximately 90-93% of their measured time inside
+matrix-multiply calls. Core-slice setup was about 1-2%, and batch sizes and
+cache-miss fractions also changed. Source analysis identifies repeated small
+first-stage matmuls as a follow-up target, not proof that all their time is
+avoidable. No kernel optimization or new numerical cache is introduced.
+
+See the [full report](../../benchmarks/results/2026-09-06-treeaci-branch-cost.md),
+complete case CSV, all 40 fitted models, and protocol/hash JSON alongside it.
+Every raw node observation and fit residual is retained locally under ignored
+`target/branch-attribution-1.json`. The downstream GW stage fixtures were not
+replayed; #671 remains a separate open performance question. Related-code audit
+covered frame first-stage batching, the generalized grouped route, old counter
+reads, C API evaluator option construction, and stale historical API documents.
+
+## Verification
+
+- Affected TreeACI/TreeTN release unit and integration suites passed with
+  diagnostics both enabled and disabled. Existing manually ignored tests were
+  not enabled; no tolerance was relaxed.
+- Diagnostics-enabled affected-crate doctests passed (21 TreeACI, 169 TreeTN).
+- Affected-crate release Clippy, including all targets and strict error/panic
+  documentation warnings, passed.
+- Python analysis/gate tests passed: known model coefficients, complete case
+  matrices, paired-ratio direction, explicit gate pass/fail, and whole-run
+  invalidation preserving failed/noisy pairs (seven tests).
+- Formatting and the deterministic repository-rules review passed.
+- Final cross-crate check: `cargo check --release --all-targets` and the release
+  doctests are clean for every workspace crate that depends on the two changed
+  crates (treetci, itensorlike, capi, partitionedtreetn, aci, quanticstransform,
+  partitionedtt, quanticstci). Outside those crates and
+  `benchmarks/rust/benchmark_treeaci_branch_cost.rs`, nothing references the
+  diagnostics API, so the whole-workspace doctest run is left to CI. No
+  `docs/book` page changed, so the mdBook wrapper was not rerun.

@@ -74,7 +74,7 @@ pub struct KernelDiagnostics {
     pub accumulate_ns: u64,
     /// Child-message packing nanoseconds.
     pub gather_ns: u64,
-    /// Backend matrix multiplication dispatches.
+    /// Matrix multiplication jobs; a grouped backend call counts each job.
     pub matmul_calls: u64,
     /// Points sent to scalar message routes.
     pub scalar_points: u64,

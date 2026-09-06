@@ -122,7 +122,8 @@ pub struct NodeDiagnostics {
     pub guard_ns: u64,
     /// Total nanoseconds spent computing this node's TreeACI candidate
     /// frames: frame-cache lookup plus any miss computation, including the
-    /// BLAS contraction work.
+    /// BLAS contraction work. Batched routes include final result packing;
+    /// scalar fallbacks measure each candidate before outer batch packing.
     ///
     /// This is NOT cache-lookup time alone -- a large value here can mean
     /// genuine `chi^z` contraction cost rather than cache overhead.
@@ -270,6 +271,9 @@ pub fn record_frame(node: &str, shape: NodeShape, sample: PhaseMeasurement) {
 /// scratch investigation into where the branch kernel's per-call BLAS setup
 /// cost goes; see `crate::treetn::cached_evaluator::contraction_diagnostics`).
 ///
+/// These legacy counters are process-wide. This does not reset the thread-local
+/// registry or [`kernel_snapshot`]; use [`reset`] for a per-thread window.
+///
 /// # Examples
 ///
 /// ```
@@ -284,6 +288,7 @@ pub fn reset_contraction() {
 
 /// One human-readable line summarizing the branch-vs-chain contraction
 /// counters accumulated since the last [`reset_contraction`].
+/// These legacy counters aggregate all threads, unlike [`snapshot`].
 /// The `blas_calls` field counts backend matrix-multiply dispatches; the
 /// branch `blas_groups` field counts physical-value groups processed by the
 /// branch kernel.

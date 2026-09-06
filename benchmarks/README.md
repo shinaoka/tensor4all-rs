@@ -83,6 +83,11 @@ avoidable overhead. Test the analysis with:
 python3 scripts/test-treeaci-branch-cost.py
 ```
 
+The [2026-09-06 report](results/2026-09-06-treeaci-branch-cost.md) retains the
+complete paired case summaries, all fitted coefficients and experiment hashes.
+It localizes a candidate-frame residual without claiming a production speedup
+or resolving the downstream GW workload.
+
 #### Other Rust benchmarks
 
 ```bash

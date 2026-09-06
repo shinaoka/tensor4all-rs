@@ -139,8 +139,9 @@ unique subtree assignments, frame batches count candidate samples, and query
 batches count caller-supplied full points. Their denominators are not
 interchangeable.
 
-`guard_ns` excludes recursive child messages; `frame_ns` includes candidate
-contraction and final packing. `query_ns` is inclusive of the whole evaluator
+`guard_ns` excludes recursive child messages; batched `frame_ns` includes
+candidate contraction and final packing, while scalar fallbacks measure each
+candidate before outer batch packing. `query_ns` is inclusive of the whole evaluator
 query and must not be added to message/frame time. Kernel snapshots are
 thread-local, so setup, matrix multiplication, accumulation, gathering, and
 prepared-slice hits/misses/refusals belong to the measured node. Scalar and
