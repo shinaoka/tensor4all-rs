@@ -2,7 +2,9 @@
 
 ## Status
 
-Design draft for review. Companion to `gw-rs`'s
+Historical design, superseded for the diagnostic API and timing semantics by
+[the current design](../../design/tree-aci.md) and
+[the #732 release experiment](../../../benchmarks/README.md). Companion to `gw-rs`'s
 `docs/superpowers/specs/2026-08-24-aci-stage-isolation-design.md`, which
 consumes the interface this document defines.
 

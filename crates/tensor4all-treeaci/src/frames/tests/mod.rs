@@ -1417,7 +1417,7 @@ fn candidate_frames_for_edge_records_frame_diagnostics_with_hub_coordination_num
     let snapshot = branch_diagnostics::snapshot();
     let hub_record = snapshot
         .iter()
-        .find(|record| record.node == "0:0")
+        .find(|record| record.node == "input:0:0")
         .expect("hub node (0) of input 0 recorded in branch diagnostics");
     assert_eq!(hub_record.coordination_number, 3);
     assert_eq!(hub_record.bond_dims.len(), 3);
@@ -1472,7 +1472,7 @@ fn frame_diagnostics_keys_are_namespaced_per_input_operand() {
     let nodes: Vec<&str> = snapshot.iter().map(|record| record.node.as_str()).collect();
     assert_eq!(
         nodes,
-        vec!["0:0", "1:0"],
+        vec!["input:0:0", "input:1:0"],
         "the same hub node of two operands must not merge into one entry"
     );
     for record in &snapshot {

@@ -20,6 +20,76 @@ runner body into `benchmarks/rust/` and keep the crate-local entry point thin.
 
 ### Rust
 
+#### TreeACI branch cost attribution (#732)
+
+`benchmark_branch_cost` uses the same hub core coefficients and the same
+elementary leaf tensors at degrees 2, 3 and 4. Fusing adjacent bond/physical
+axes into a leaf is an exact tensor-product regrouping; a dense oracle verifies
+that each topology represents the same function. Actual hub bond products are
+16, 64, 256 and 1024. This is a controlled local-cost experiment, not a replay
+of the downstream GW calculation; fused leaves intentionally have different
+physical dimensions and are excluded from the hub fit.
+
+Build release binaries at the baseline and candidate revisions with the same
+benchmark source and lockfile. The benchmark lives in
+`rust/benchmark_treeaci_branch_cost.rs`, included by the TreeACI example. Add
+the workspace `serde_json` dev-dependency when using a baseline predating this
+example. Supply each revision via `T4A_BENCH_GIT_COMMIT` at build time, and keep
+each executable in a distinct path. First measure noise by passing the same
+feature-disabled baseline binary as both sides:
+
+```bash
+T4A_BENCH_GIT_COMMIT=$(git rev-parse HEAD) \
+  cargo build --release -p tensor4all-treeaci --example benchmark_branch_cost
+python3 scripts/run-treeaci-branch-cost.py \
+  --baseline /path/to/baseline --candidate /path/to/baseline \
+  --baseline-commit BASELINE_HASH --candidate-commit BASELINE_HASH \
+  --pairs 5 --repeats 5 --cpu 2 --output target/branch-noise.json
+```
+
+Then run the complete paired baseline/candidate experiment, declaring
+`--max-regression` only after the independent noise study supports a bound.
+The runner pins affinity and all Rayon/BLAS thread variables to one, alternates
+A/B order, preserves every case and failure, and reports paired medians with
+bootstrap intervals. Any predeclared dispersion, load, frequency, execution or
+correctness failure makes the entire experiment `INCONCLUSIVE`. Existing output
+files are never replaced. NumPy is required (`python3 -m pip install numpy`).
+
+For attribution, build the candidate with `--features diagnostics` and repeat
+the paired run against its feature-disabled build, without a regression gate.
+This explicitly measures observer overhead. Node records include actual
+dimensions, unique-component/candidate/caller batch statistics, exclusive
+message and frame time, inclusive query time, per-node kernel buckets and cache
+counts. Kernel buckets are subdivisions of phase time. Query cache high-water
+observations cover the whole evaluator and must not be summed across centers.
+
+The default suite has 120 cases: both f64 and Complex64, all four bond profiles,
+all three degrees, ACI with the same seed/tolerance/global-Guard settings, and
+cold/warm queries of 8 and 32 points. `--full` has 432 cases, adding physical
+dimension 3 and query sizes 2 and 128. Setup and dense correctness checks are
+outside query timings; ACI timings include initialization and sweeps. One
+untimed warm-up precedes each case. Outputs are consumed with value-dependent
+`black_box` and every timed result is checked numerically.
+
+For each scalar/physical-dimension/batch/cache/phase/operand stratum, the report
+fits `ns/point = intercept + beta*S + gamma3*[z=3] + gamma4*[z=4]`, where
+`S = d * product(incident_bond_dims)`. It reports every residual, actual miss
+fractions and batch sizes. These are descriptive fits, not causal proof:
+anisotropic bonds, batching and algorithm-route thresholds can leave systematic
+residuals even at identical S. The report never equates all residual work with
+avoidable overhead. Test the analysis with:
+
+```bash
+python3 scripts/test-treeaci-branch-cost.py
+```
+
+The [2026-09-06 report](results/2026-09-06-treeaci-branch-cost.md) retains the
+complete paired case summaries, all fitted coefficients and experiment hashes.
+It localizes a candidate-frame residual without claiming a production speedup
+or resolving the downstream GW workload.
+
+#### Other Rust benchmarks
+
 ```bash
 cd crates/tensor4all-itensorlike
 cargo run --release --example benchmark_contract

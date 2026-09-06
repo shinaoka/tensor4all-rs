@@ -624,6 +624,9 @@ impl<'a, V: TreeAciNode> InputEvaluators<'a, V> {
         Self::new_with_message_cache_max_bytes(inputs, problem, usize::MAX)
     }
 
+    // The operand index only labels diagnostics, so the enumeration is
+    // deliberately unused when that feature is off.
+    #[cfg_attr(not(feature = "diagnostics"), allow(clippy::unused_enumerate_index))]
     pub(crate) fn new_with_message_cache_max_bytes(
         inputs: &'a [TreeTN<IdxTensor, V>],
         problem: &crate::problem::PreparedTreeProblem<V>,
@@ -646,7 +649,16 @@ impl<'a, V: TreeAciNode> InputEvaluators<'a, V> {
         let plan = CachedEvaluatorPlan::new(first_input, &indices)?;
         let inputs = inputs
             .iter()
-            .map(|input| TreeTNCachedEvaluator::with_plan(input, &plan, options.clone()))
+            .enumerate()
+            .map(|(_operand, input)| {
+                let options = options.clone();
+                #[cfg(feature = "diagnostics")]
+                let options = CachedEvaluatorOptions {
+                    diagnostic_namespace: format!("input:{_operand}"),
+                    ..options
+                };
+                TreeTNCachedEvaluator::with_plan(input, &plan, options)
+            })
             .collect::<std::result::Result<Vec<_>, _>>()?;
         let index_count = indices.len();
         Ok(Self {
@@ -855,6 +867,8 @@ impl<'a, V: TreeAciNode> GuardOutputEvaluator<'a, V> {
             output,
             plan,
             CachedEvaluatorOptions {
+                #[cfg(feature = "diagnostics")]
+                diagnostic_namespace: "output".to_owned(),
                 message_cache_max_bytes,
                 ..CachedEvaluatorOptions::<V>::default()
             },

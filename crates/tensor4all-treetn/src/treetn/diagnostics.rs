@@ -1,20 +1,78 @@
-//! Per-node branch-point diagnostics for TreeACI issue #671's investigation.
+//! Per-node cost attribution for TreeACI issues #671 and #732.
 //!
 //! Records, per tree node, Guard message-cache and TreeACI frame-cache
 //! timing and hit/miss counts, plus the node's coordination number and
 //! incident bond dimensions -- data needed to tell topology-necessary
-//! `chi^z` cost apart from avoidable repeated work at a branch hub. See
-//! `docs/superpowers/specs/2026-08-24-treeaci-branch-diagnostics-design.md`.
+//! `chi^z` cost apart from avoidable repeated work at a branch hub.
 //!
 //! One thread-local registry. Callers explicitly reset it at the start of a
 //! diagnostics window and read it back via `snapshot()` at the end. It is not
-//! a cross-call or cross-thread store.
+//! cross-thread storage. Each row retains one operand/node/actual shape;
+//! query times are inclusive and message times exclude recursive children.
+//! Instrumentation overhead is included. Measure production wall time with the
+//! feature disabled and report the observed diagnostic overhead separately.
 
 use std::cell::RefCell;
-use std::collections::HashMap;
+use std::collections::BTreeMap;
 use std::time::Duration;
 
+mod cost;
+pub use cost::{
+    BatchDiagnostics, CacheDiagnostics, KernelDiagnostics, NodeShape, PhaseMeasurement,
+};
+
+/// Reads cumulative kernel counters for this thread only.
+///
+/// Use [`KernelDiagnostics::since`] to obtain a measurement delta.
+///
+/// # Examples
+/// ```
+/// use tensor4all_treetn::diagnostics::{kernel_snapshot, reset};
+/// reset();
+/// assert_eq!(kernel_snapshot().matmul_calls, 0);
+/// ```
+pub fn kernel_snapshot() -> KernelDiagnostics {
+    KERNEL.with(|kernel| *kernel.borrow())
+}
+
+/// Adds kernel work to this thread's counters; unspecified fields are zero.
+///
+/// # Examples
+/// ```
+/// use tensor4all_treetn::diagnostics::{kernel_snapshot, record_kernel, reset, KernelDiagnostics};
+/// reset();
+/// record_kernel(KernelDiagnostics { matmul_calls: 2, ..Default::default() });
+/// assert_eq!(kernel_snapshot().matmul_calls, 2);
+/// ```
+pub fn record_kernel(delta: KernelDiagnostics) {
+    KERNEL.with(|kernel| {
+        let mut kernel = kernel.borrow_mut();
+        *kernel = kernel.plus(delta);
+    });
+}
+
+pub(super) fn nanos(duration: Duration) -> u64 {
+    u64::try_from(duration.as_nanos()).unwrap_or(u64::MAX)
+}
+
+pub(super) fn record_query(
+    node: &str,
+    shape: NodeShape,
+    elapsed: Duration,
+    points: usize,
+    cache: CacheDiagnostics,
+) {
+    with_entry(node, shape, |entry| {
+        entry.query_ns = entry.query_ns.saturating_add(nanos(elapsed));
+        entry.query_batches.record(points as u64);
+        entry.query_cache.record(cache);
+    });
+}
+
 /// Per-node branch-point timing and cache statistics.
+///
+/// Unlike the aggregate contraction summary, these records distinguish actual
+/// shapes and operands. [`NodeShape`] defines the tensor-size proxy.
 ///
 /// # Examples
 ///
@@ -27,29 +85,45 @@ use std::time::Duration;
 /// ```
 #[derive(Clone, Debug, Default)]
 pub struct NodeDiagnostics {
-    /// The registry key for this node. TreeACI's frame records use
-    /// `"{input}:{node:?}"`, namespacing the node by its operand index;
-    /// Guard records use the bare `"{node:?}"` (see [`record_guard`]).
+    /// Operand namespace and node Debug label, e.g. `"input:0:3"` or `"output:3"`.
     pub node: String,
     /// Number of tree edges incident to this node.
     pub coordination_number: usize,
     /// Bond dimensions for each incident edge.
     ///
-    /// Always has exactly `coordination_number` entries; an edge whose bond
-    /// dimension could not be looked up contributes a `0` sentinel rather
-    /// than being skipped. The order of the entries is not guaranteed to be
-    /// stable across calls or between the Guard and frame recording sites,
-    /// so treat this as a multiset of incident bond dimensions.
+    /// Sorted multiset of actual incident dimensions; its length is the degree.
     pub bond_dims: Vec<usize>,
-    /// Total nanoseconds spent computing this node's Guard message: cache
-    /// lookup plus any miss computation.
+    /// Product of the physical dimensions at this node (one for no physical legs).
+    pub physical_dim: usize,
+    /// Checked product of incident bond dimensions; `None` indicates overflow.
+    pub bond_product: Option<usize>,
+    /// Checked `physical_dim * bond_product`, a tensor-size proxy, not a FLOP count.
+    pub local_elements: Option<usize>,
+    /// Inclusive complete query time attributed to its selected center.
+    /// Do not add this to message or frame times.
+    pub query_ns: u64,
+    /// Full-point batches supplied by the caller, including duplicate points.
+    pub query_batches: BatchDiagnostics,
+    /// Whole-evaluator cache high-water observations; do not sum across nodes.
+    pub query_cache: CacheDiagnostics,
+    /// Unique component-assignment batches handled by Guard messages.
+    pub guard_batches: BatchDiagnostics,
+    /// Candidate sample batches handled by frame evaluation.
+    pub frame_batches: BatchDiagnostics,
+    /// Kernel work within this node's exclusive Guard message time.
+    pub guard_kernel: KernelDiagnostics,
+    /// Kernel work within this node's candidate-frame time.
+    pub frame_kernel: KernelDiagnostics,
+    /// Exclusive nanoseconds spent computing this node's Guard message: cache
+    /// lookup plus any miss computation, excluding recursive child message work.
     ///
     /// This is NOT cache-lookup time alone -- a large value here can mean
     /// genuine `chi^z` contraction cost rather than cache overhead.
     pub guard_ns: u64,
     /// Total nanoseconds spent computing this node's TreeACI candidate
     /// frames: frame-cache lookup plus any miss computation, including the
-    /// BLAS contraction work.
+    /// BLAS contraction work. Batched routes include final result packing;
+    /// scalar fallbacks measure each candidate before outer batch packing.
     ///
     /// This is NOT cache-lookup time alone -- a large value here can mean
     /// genuine `chi^z` contraction cost rather than cache overhead.
@@ -65,7 +139,10 @@ pub struct NodeDiagnostics {
 }
 
 thread_local! {
-    static REGISTRY: RefCell<HashMap<String, NodeDiagnostics>> = RefCell::new(HashMap::new());
+    // INVARIANT: opt-in observation storage, reset by the measurement owner;
+    // one aggregate row per node and observed shape, never one per point.
+    static REGISTRY: RefCell<BTreeMap<(String, NodeShape), NodeDiagnostics>> = const { RefCell::new(BTreeMap::new()) };
+    static KERNEL: RefCell<KernelDiagnostics> = RefCell::new(KernelDiagnostics::default());
 }
 
 /// Clear the thread-local diagnostics registry.
@@ -74,31 +151,33 @@ thread_local! {
 ///
 /// ```
 /// use std::time::Duration;
-/// use tensor4all_treetn::diagnostics::{record_guard, reset, snapshot};
+/// use tensor4all_treetn::diagnostics::{record_guard, reset, snapshot, NodeShape, PhaseMeasurement};
 ///
-/// record_guard("hub", 1, &[2], Duration::from_nanos(1), 1, 0);
+/// record_guard("hub", NodeShape { physical_dim: 2, bond_dims: vec![2] },
+///     PhaseMeasurement { elapsed: Duration::from_nanos(1), hits: 1, misses: 0, ..Default::default() });
 /// assert_eq!(snapshot().len(), 1);
 /// reset();
 /// assert!(snapshot().is_empty());
 /// ```
 pub fn reset() {
     REGISTRY.with(|registry| registry.borrow_mut().clear());
+    KERNEL.with(|kernel| *kernel.borrow_mut() = KernelDiagnostics::default());
 }
 
 /// Read back the current accumulated diagnostics as a snapshot.
 ///
-/// The returned `Vec`'s order is not guaranteed to be stable across calls:
-/// it reflects `HashMap` iteration order. A caller that needs deterministic
-/// output should sort the result (for example by `node`).
+/// Records are sorted by node label, physical dimension and sorted incident
+/// dimensions. Shape changes produce distinct rows. Snapshot does not reset.
 ///
 /// # Examples
 ///
 /// ```
 /// use std::time::Duration;
-/// use tensor4all_treetn::diagnostics::{record_guard, reset, snapshot};
+/// use tensor4all_treetn::diagnostics::{record_guard, reset, snapshot, NodeShape, PhaseMeasurement};
 ///
 /// reset();
-/// record_guard("hub", 2, &[3, 4], Duration::from_nanos(5), 2, 1);
+/// record_guard("hub", NodeShape { physical_dim: 2, bond_dims: vec![3, 4] },
+///     PhaseMeasurement { elapsed: Duration::from_nanos(5), hits: 2, misses: 1, ..Default::default() });
 /// let records = snapshot();
 /// assert_eq!(records.len(), 1);
 /// assert_eq!(records[0].node, "hub");
@@ -108,22 +187,21 @@ pub fn snapshot() -> Vec<NodeDiagnostics> {
     REGISTRY.with(|registry| registry.borrow().values().cloned().collect())
 }
 
-fn with_entry(
-    node: &str,
-    coordination_number: usize,
-    bond_dims: &[usize],
-    f: impl FnOnce(&mut NodeDiagnostics),
-) {
+fn with_entry(node: &str, mut shape: NodeShape, f: impl FnOnce(&mut NodeDiagnostics)) {
+    shape.bond_dims.sort_unstable();
     REGISTRY.with(|registry| {
         let mut map = registry.borrow_mut();
         let entry = map
-            .entry(node.to_string())
+            .entry((node.to_owned(), shape.clone()))
             .or_insert_with(|| NodeDiagnostics {
                 node: node.to_string(),
+                coordination_number: shape.bond_dims.len(),
+                physical_dim: shape.physical_dim,
+                bond_product: shape.bond_product(),
+                local_elements: shape.local_elements(),
+                bond_dims: shape.bond_dims,
                 ..Default::default()
             });
-        entry.coordination_number = coordination_number;
-        entry.bond_dims = bond_dims.to_vec();
         f(entry);
     });
 }
@@ -134,39 +212,29 @@ fn with_entry(
 ///
 /// ```
 /// use std::time::Duration;
-/// use tensor4all_treetn::diagnostics::{record_guard, reset, snapshot};
+/// use tensor4all_treetn::diagnostics::{record_guard, reset, snapshot, NodeShape, PhaseMeasurement};
 ///
 /// reset();
-/// record_guard("hub", 3, &[2, 2, 2], Duration::from_nanos(10), 4, 1);
+/// record_guard("hub", NodeShape { physical_dim: 2, bond_dims: vec![2, 2, 2] },
+///     PhaseMeasurement { elapsed: Duration::from_nanos(10), hits: 4, misses: 1, ..Default::default() });
 /// let record = &snapshot()[0];
 /// assert_eq!(record.coordination_number, 3);
 /// assert_eq!(record.guard_cache_hits, 4);
 /// assert_eq!(record.guard_cache_misses, 1);
 /// ```
 ///
-/// # Known limitation
 ///
-/// The `node` key carries no per-operand namespace: it is just the tree
-/// node's `Debug` label. If a caller's diagnostics window spans more than
-/// one distinct tree -- as `TreeAciProduct::combine` does, since it builds
-/// one `TreeTNCachedEvaluator` per input tree -- colliding node labels
-/// across those trees merge into a single registry entry. TreeACI's
-/// frame-side key does not have this problem, because the operand index
-/// `input` is available there and is included in the key. Fixing this on
-/// the Guard side would require threading an operand identity through
-/// `TreeTNCachedEvaluator`'s constructor.
-pub fn record_guard(
-    node: &str,
-    coordination_number: usize,
-    bond_dims: &[usize],
-    elapsed: Duration,
-    hits: u64,
-    misses: u64,
-) {
-    with_entry(node, coordination_number, bond_dims, |entry| {
-        entry.guard_ns += elapsed.as_nanos() as u64;
-        entry.guard_cache_hits += hits;
-        entry.guard_cache_misses += misses;
+/// `node` must include an operand namespace. `shape` preserves the actual
+/// physical and bond dimensions, while `sample` excludes recursive child work.
+pub fn record_guard(node: &str, shape: NodeShape, sample: PhaseMeasurement) {
+    with_entry(node, shape, |entry| {
+        entry.guard_ns = entry.guard_ns.saturating_add(nanos(sample.elapsed));
+        entry.guard_cache_hits = entry.guard_cache_hits.saturating_add(sample.hits);
+        entry.guard_cache_misses = entry.guard_cache_misses.saturating_add(sample.misses);
+        entry
+            .guard_batches
+            .record(sample.hits.saturating_add(sample.misses));
+        entry.guard_kernel = entry.guard_kernel.plus(sample.kernel);
     });
 }
 
@@ -177,33 +245,34 @@ pub fn record_guard(
 ///
 /// ```
 /// use std::time::Duration;
-/// use tensor4all_treetn::diagnostics::{record_frame, reset, snapshot};
+/// use tensor4all_treetn::diagnostics::{record_frame, reset, snapshot, NodeShape, PhaseMeasurement};
 ///
 /// reset();
-/// record_frame("0:hub", 3, &[2, 2, 2], Duration::from_nanos(20), 5, 2);
+/// record_frame("input:0:hub", NodeShape { physical_dim: 2, bond_dims: vec![2, 2, 2] },
+///     PhaseMeasurement { elapsed: Duration::from_nanos(20), hits: 5, misses: 2, ..Default::default() });
 /// let record = &snapshot()[0];
-/// assert_eq!(record.node, "0:hub");
+/// assert_eq!(record.node, "input:0:hub");
 /// assert_eq!(record.frame_cache_hits, 5);
 /// assert_eq!(record.frame_cache_misses, 2);
 /// ```
-pub fn record_frame(
-    node: &str,
-    coordination_number: usize,
-    bond_dims: &[usize],
-    elapsed: Duration,
-    hits: u64,
-    misses: u64,
-) {
-    with_entry(node, coordination_number, bond_dims, |entry| {
-        entry.frame_ns += elapsed.as_nanos() as u64;
-        entry.frame_cache_hits += hits;
-        entry.frame_cache_misses += misses;
+pub fn record_frame(node: &str, shape: NodeShape, sample: PhaseMeasurement) {
+    with_entry(node, shape, |entry| {
+        entry.frame_ns = entry.frame_ns.saturating_add(nanos(sample.elapsed));
+        entry.frame_cache_hits = entry.frame_cache_hits.saturating_add(sample.hits);
+        entry.frame_cache_misses = entry.frame_cache_misses.saturating_add(sample.misses);
+        entry
+            .frame_batches
+            .record(sample.hits.saturating_add(sample.misses));
+        entry.frame_kernel = entry.frame_kernel.plus(sample.kernel);
     });
 }
 
 /// Reset the branch-vs-chain contraction-kernel counters (issue #671's
 /// scratch investigation into where the branch kernel's per-call BLAS setup
 /// cost goes; see `crate::treetn::cached_evaluator::contraction_diagnostics`).
+///
+/// These legacy counters are process-wide. This does not reset the thread-local
+/// registry or [`kernel_snapshot`]; use [`reset`] for a per-thread window.
 ///
 /// # Examples
 ///
@@ -219,6 +288,7 @@ pub fn reset_contraction() {
 
 /// One human-readable line summarizing the branch-vs-chain contraction
 /// counters accumulated since the last [`reset_contraction`].
+/// These legacy counters aggregate all threads, unlike [`snapshot`].
 /// The `blas_calls` field counts backend matrix-multiply dispatches; the
 /// branch `blas_groups` field counts physical-value groups processed by the
 /// branch kernel.
@@ -238,44 +308,4 @@ pub fn contraction_summary() -> String {
 }
 
 #[cfg(test)]
-mod tests {
-    use super::*;
-
-    #[test]
-    fn reset_then_snapshot_is_empty() {
-        record_guard("a", 2, &[3, 3], Duration::from_nanos(10), 1, 0);
-        reset();
-        assert!(snapshot().is_empty());
-    }
-
-    #[test]
-    fn record_guard_and_record_frame_accumulate_into_one_entry_per_node() {
-        reset();
-        record_guard("hub", 3, &[4, 4, 4], Duration::from_nanos(100), 2, 1);
-        record_guard("hub", 3, &[4, 4, 4], Duration::from_nanos(50), 0, 1);
-        record_frame("hub", 3, &[4, 4, 4], Duration::from_nanos(30), 5, 2);
-
-        let snap = snapshot();
-        assert_eq!(snap.len(), 1);
-        let hub = &snap[0];
-        assert_eq!(hub.node, "hub");
-        assert_eq!(hub.coordination_number, 3);
-        assert_eq!(hub.bond_dims, vec![4, 4, 4]);
-        assert_eq!(hub.guard_ns, 150);
-        assert_eq!(hub.guard_cache_hits, 2);
-        assert_eq!(hub.guard_cache_misses, 2);
-        assert_eq!(hub.frame_ns, 30);
-        assert_eq!(hub.frame_cache_hits, 5);
-        assert_eq!(hub.frame_cache_misses, 2);
-    }
-
-    #[test]
-    fn distinct_nodes_get_distinct_entries() {
-        reset();
-        record_guard("a", 2, &[3, 3], Duration::from_nanos(10), 1, 0);
-        record_guard("b", 3, &[5, 5, 5], Duration::from_nanos(20), 1, 0);
-        let mut nodes: Vec<String> = snapshot().into_iter().map(|d| d.node).collect();
-        nodes.sort();
-        assert_eq!(nodes, vec!["a".to_string(), "b".to_string()]);
-    }
-}
+mod tests;

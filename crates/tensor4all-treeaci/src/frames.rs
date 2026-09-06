@@ -21,6 +21,34 @@ use crate::problem::DirectedEdge;
 #[cfg(feature = "diagnostics")]
 use tensor4all_treetn::diagnostics;
 
+#[cfg(feature = "diagnostics")]
+struct FrameKernelTimer {
+    started: std::time::Instant,
+    setup: bool,
+}
+
+#[cfg(feature = "diagnostics")]
+impl FrameKernelTimer {
+    fn new(setup: bool) -> Self {
+        Self {
+            started: std::time::Instant::now(),
+            setup,
+        }
+    }
+}
+
+#[cfg(feature = "diagnostics")]
+impl Drop for FrameKernelTimer {
+    fn drop(&mut self) {
+        let elapsed = u64::try_from(self.started.elapsed().as_nanos()).unwrap_or(u64::MAX);
+        diagnostics::record_kernel(diagnostics::KernelDiagnostics {
+            setup_ns: if self.setup { elapsed } else { 0 },
+            accumulate_ns: if self.setup { 0 } else { elapsed },
+            ..Default::default()
+        });
+    }
+}
+
 fn checked_product(factors: &[usize], context: &'static str) -> Result<usize> {
     factors.iter().try_fold(1usize, |product, &factor| {
         product
@@ -575,6 +603,8 @@ fn pack_candidate_results<T: TreeAciScalar>(
     layout: PackedCandidateFrameLayout,
 ) -> Result<PackedCandidateFrames<T>> {
     let candidate_count = candidate_order.len();
+    #[cfg(feature = "diagnostics")]
+    let _kernel_timer = FrameKernelTimer::new(false);
     if results.len() != candidate_count {
         return Err(TreeAciError::InternalInvariant {
             message: "packed candidate result count differs from its order mapping",
@@ -1596,7 +1626,7 @@ impl<T: TreeAciScalar> InputFrameStore<T> {
         let mut pending: Vec<(usize, CandidateCacheKey)> = Vec::new();
         let mut results: Vec<Option<Rc<[T]>>> = vec![None; candidates.len()];
         #[cfg(feature = "diagnostics")]
-        let diag_start = std::time::Instant::now();
+        let diag_start = (std::time::Instant::now(), diagnostics::kernel_snapshot());
         #[cfg(feature = "diagnostics")]
         let (mut diag_hits, mut diag_misses) = (0u64, 0u64);
         #[cfg(test)]
@@ -1766,6 +1796,13 @@ impl<T: TreeAciScalar> InputFrameStore<T> {
             });
         }
 
+        let packed = pack_candidate_results(
+            outgoing_dim,
+            (0..candidates.len()).collect(),
+            results,
+            layout,
+        )?;
+
         #[cfg(feature = "diagnostics")]
         diagnostics_record_frame(
             tree,
@@ -1773,17 +1810,12 @@ impl<T: TreeAciScalar> InputFrameStore<T> {
             directed,
             directed_edge,
             input,
-            diag_start.elapsed(),
+            diag_start,
             diag_hits,
             diag_misses,
         );
 
-        pack_candidate_results(
-            outgoing_dim,
-            (0..candidates.len()).collect(),
-            results,
-            layout,
-        )
+        Ok(packed)
     }
 
     /// Arbitrary-degree counterpart to
@@ -1882,7 +1914,7 @@ impl<T: TreeAciScalar> InputFrameStore<T> {
         let mut groups: std::collections::BTreeMap<usize, Vec<usize>> =
             std::collections::BTreeMap::new();
         #[cfg(feature = "diagnostics")]
-        let diag_start = std::time::Instant::now();
+        let diag_start = (std::time::Instant::now(), diagnostics::kernel_snapshot());
         for (candidate_index, candidate) in candidates.iter().enumerate() {
             // The same ordered-incoming validation the scalar route performs
             // while deriving its (deliberately absent) cache key.
@@ -2009,6 +2041,13 @@ impl<T: TreeAciScalar> InputFrameStore<T> {
             }
         }
 
+        let packed = pack_candidate_results(
+            outgoing_dim,
+            (0..candidates.len()).collect(),
+            results,
+            layout,
+        )?;
+
         #[cfg(feature = "diagnostics")]
         diagnostics_record_frame(
             tree,
@@ -2016,17 +2055,12 @@ impl<T: TreeAciScalar> InputFrameStore<T> {
             directed,
             directed_edge,
             input,
-            diag_start.elapsed(),
+            diag_start,
             0,
             candidates.len() as u64,
         );
 
-        pack_candidate_results(
-            outgoing_dim,
-            (0..candidates.len()).collect(),
-            results,
-            layout,
-        )
+        Ok(packed)
     }
 
     /// Batched counterpart to [`Self::candidate_frames_for_edge`]'s
@@ -2098,7 +2132,7 @@ impl<T: TreeAciScalar> InputFrameStore<T> {
             std::collections::BTreeMap::new();
         let mut results: Vec<Option<Rc<[T]>>> = vec![None; candidates.len()];
         #[cfg(feature = "diagnostics")]
-        let diag_start = std::time::Instant::now();
+        let diag_start = (std::time::Instant::now(), diagnostics::kernel_snapshot());
         #[cfg(feature = "diagnostics")]
         let (mut diag_hits, mut diag_misses) = (0u64, 0u64);
         for (candidate_index, candidate) in candidates.iter().enumerate() {
@@ -2224,6 +2258,13 @@ impl<T: TreeAciScalar> InputFrameStore<T> {
             }
         }
 
+        let packed = pack_candidate_results(
+            outgoing_dim,
+            (0..candidates.len()).collect(),
+            results,
+            layout,
+        )?;
+
         #[cfg(feature = "diagnostics")]
         diagnostics_record_frame(
             tree,
@@ -2231,17 +2272,12 @@ impl<T: TreeAciScalar> InputFrameStore<T> {
             directed,
             directed_edge,
             input,
-            diag_start.elapsed(),
+            diag_start,
             diag_hits,
             diag_misses,
         );
 
-        pack_candidate_results(
-            outgoing_dim,
-            (0..candidates.len()).collect(),
-            results,
-            layout,
-        )
+        Ok(packed)
     }
 
     pub(crate) fn candidate_frame<V: TreeAciNode>(
@@ -2261,7 +2297,7 @@ impl<T: TreeAciScalar> InputFrameStore<T> {
             message: "candidate frame references an unknown input",
         })?;
         #[cfg(feature = "diagnostics")]
-        let diag_start = std::time::Instant::now();
+        let diag_start = (std::time::Instant::now(), diagnostics::kernel_snapshot());
         #[cfg(feature = "diagnostics")]
         let directed =
             problem
@@ -2281,7 +2317,7 @@ impl<T: TreeAciScalar> InputFrameStore<T> {
                     directed,
                     directed_edge,
                     input,
-                    diag_start.elapsed(),
+                    diag_start,
                     1,
                     0,
                 );
@@ -2322,7 +2358,7 @@ impl<T: TreeAciScalar> InputFrameStore<T> {
                 directed,
                 directed_edge,
                 input,
-                diag_start.elapsed(),
+                diag_start,
                 0,
                 1,
             );
@@ -2335,7 +2371,7 @@ impl<T: TreeAciScalar> InputFrameStore<T> {
             directed,
             directed_edge,
             input,
-            diag_start.elapsed(),
+            diag_start,
             0,
             1,
         );
@@ -2986,6 +3022,8 @@ fn single_incoming_core_matrix<T: TreeAciScalar>(
     outgoing_dim: usize,
     incoming_dim: usize,
 ) -> Matrix<T> {
+    #[cfg(feature = "diagnostics")]
+    let _kernel_timer = FrameKernelTimer::new(true);
     let outgoing_stride = core.strides[outgoing_axis];
     let incoming_stride = core.strides[incoming_axis];
     #[cfg(test)]
@@ -3017,6 +3055,8 @@ fn single_incoming_all_physical_core_matrix<T: TreeAciScalar>(
     outgoing_dim: usize,
     incoming_dim: usize,
 ) -> Matrix<T> {
+    #[cfg(feature = "diagnostics")]
+    let _kernel_timer = FrameKernelTimer::new(true);
     let rows = outgoing_dim * physical.local_dim;
     let outgoing_stride = core.strides[outgoing_axis];
     let incoming_stride = core.strides[incoming_axis];
@@ -3061,22 +3101,41 @@ fn contract_prepared_core_batched<T: TreeAciScalar>(
     core_matrix: &Matrix<T>,
     incoming_frame_matrix: &Matrix<T>,
 ) -> Result<Matrix<T>> {
-    tensor4all_tensorbackend::mat_mul(core_matrix, incoming_frame_matrix).map_err(|error| {
-        TreeAciError::Numerical {
-            message: error.to_string(),
-        }
-    })
+    #[cfg(feature = "diagnostics")]
+    let kernel_started = std::time::Instant::now();
+    let result =
+        tensor4all_tensorbackend::mat_mul(core_matrix, incoming_frame_matrix).map_err(|error| {
+            TreeAciError::Numerical {
+                message: error.to_string(),
+            }
+        });
+    #[cfg(feature = "diagnostics")]
+    diagnostics_record_matmul(kernel_started.elapsed(), 1);
+    result
 }
 
 fn contract_prepared_core_batched_owned<T: TreeAciScalar>(
     core_matrix: Matrix<T>,
     incoming_frame_matrix: Matrix<T>,
 ) -> Result<Matrix<T>> {
-    tensor4all_tensorbackend::mat_mul_owned(core_matrix, incoming_frame_matrix).map_err(|error| {
-        TreeAciError::Numerical {
+    #[cfg(feature = "diagnostics")]
+    let kernel_started = std::time::Instant::now();
+    let result = tensor4all_tensorbackend::mat_mul_owned(core_matrix, incoming_frame_matrix)
+        .map_err(|error| TreeAciError::Numerical {
             message: error.to_string(),
-        }
-    })
+        });
+    #[cfg(feature = "diagnostics")]
+    diagnostics_record_matmul(kernel_started.elapsed(), 1);
+    result
+}
+
+#[cfg(feature = "diagnostics")]
+fn diagnostics_record_matmul(elapsed: std::time::Duration, calls: usize) {
+    diagnostics::record_kernel(diagnostics::KernelDiagnostics {
+        matmul_ns: u64::try_from(elapsed.as_nanos()).unwrap_or(u64::MAX),
+        matmul_calls: calls as u64,
+        ..Default::default()
+    });
 }
 
 /// Contracts a core slice's two incoming axes against batches of candidate
@@ -3421,6 +3480,8 @@ fn generalized_incoming_batch<T: TreeAciScalar>(
                     )
                 })
                 .collect::<Vec<_>>();
+            #[cfg(feature = "diagnostics")]
+            let kernel_started = std::time::Instant::now();
             tensor4all_tensorbackend::grouped_mat_mul_shared(
                 &stage,
                 frame_matrices[axis_index].as_col_major_slice(),
@@ -3431,6 +3492,8 @@ fn generalized_incoming_batch<T: TreeAciScalar>(
             .map_err(|error| TreeAciError::Numerical {
                 message: error.to_string(),
             })?;
+            #[cfg(feature = "diagnostics")]
+            diagnostics_record_matmul(kernel_started.elapsed(), jobs.len());
         }
         stage = next;
         rows = next_rows;
@@ -3455,7 +3518,7 @@ fn diagnostics_node_topology<V: TreeAciNode>(
     directed: &DirectedEdge<V>,
     directed_edge: DirectedEdgeId,
     input: usize,
-) -> (String, usize, Vec<usize>) {
+) -> (String, diagnostics::NodeShape) {
     let coordination_number = directed.incoming_to_from.len() + 1;
     let mut bond_dims = Vec::with_capacity(coordination_number);
     bond_dims.push(outgoing_bond(tree, problem, directed_edge).map_or(0, |index| index.dim()));
@@ -3463,9 +3526,11 @@ fn diagnostics_node_topology<V: TreeAciNode>(
         bond_dims.push(outgoing_bond(tree, problem, incoming).map_or(0, |index| index.dim()));
     }
     (
-        format!("{input}:{:?}", directed.from),
-        coordination_number,
-        bond_dims,
+        format!("input:{input}:{:?}", directed.from),
+        diagnostics::NodeShape {
+            physical_dim: problem.physical[problem.node_positions[&directed.from]].local_dim,
+            bond_dims,
+        },
     )
 }
 
@@ -3480,19 +3545,20 @@ fn diagnostics_record_frame<V: TreeAciNode>(
     directed: &DirectedEdge<V>,
     directed_edge: DirectedEdgeId,
     input: usize,
-    elapsed: std::time::Duration,
+    started: (std::time::Instant, diagnostics::KernelDiagnostics),
     hits: u64,
     misses: u64,
 ) {
-    let (node, coordination_number, bond_dims) =
-        diagnostics_node_topology(tree, problem, directed, directed_edge, input);
+    let (node, shape) = diagnostics_node_topology(tree, problem, directed, directed_edge, input);
     diagnostics::record_frame(
         &node,
-        coordination_number,
-        &bond_dims,
-        elapsed,
-        hits,
-        misses,
+        shape,
+        diagnostics::PhaseMeasurement {
+            elapsed: started.0.elapsed(),
+            hits,
+            misses,
+            kernel: diagnostics::kernel_snapshot().since(started.1),
+        },
     );
 }
 
