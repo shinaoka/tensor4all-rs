@@ -80,6 +80,24 @@ is removed from the active projection mask as soon as that capacity is used.
 Thus one Guard scan offering several pivots cannot overshoot a cut that had
 only one rank available.
 
+Convergence requires a window of `min_sweeps` consecutive pass results with
+no growth on **any** output edge, starting with the first result as the
+baseline. A rank decrease is allowed, but subsequent regrowth restarts the
+window. Network-maximum rank stability alone is insufficient: on the #741
+low-temperature CTTN, the maximum stayed at 233 while smaller cuts were still
+growing and the reconstructed output retained a large localized error.
+The implementation retains one previous rank per edge and a stability counter,
+requiring O(edges) storage and work per pass without extra contractions,
+sampling, or per-pass allocation. Returned `max_ranks` remains a summary for
+diagnostics, not the rank-stability decision input.
+
+The local LUCI residual and enabled global-guard conditions still apply.
+`Converged` is an algorithmic stopping condition, not a certified bound on the
+full-grid maximum error: the tolerance controls edge-local residuals, and the
+guard performs bounded randomized coordinate searches with its configured
+acceptance margin. Independent validation remains necessary. Exhaustive
+checks belong only in small tests or explicit diagnostic programs.
+
 ## Caches
 
 TreeACI owns three cache families. None outlives one `tree_elementwise` call;

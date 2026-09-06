@@ -84,6 +84,8 @@ where
     let mut max_errors = Vec::with_capacity(options.max_sweeps);
     let mut global_pivots = Vec::with_capacity(options.max_sweeps);
     let mut rank_limited = Vec::with_capacity(options.max_sweeps);
+    let mut previous_ranks = state.edge_ranks.clone();
+    let mut stable_rank_passes = 0;
     let mut evaluated_points = 0u64;
     let mut termination = TreeAciTermination::MaxSweeps;
     // Guard evaluators own sizeable topology/message-cache state and are not
@@ -98,6 +100,8 @@ where
             PassDirection::Reverse
         };
         let report = run_directional_pass(state, options, direction, operator)?;
+        stable_rank_passes =
+            track_rank_stability(&mut previous_ranks, &state.edge_ranks, stable_rank_passes);
         evaluated_points = evaluated_points
             .checked_add(report.evaluated_points)
             .ok_or(TreeAciError::SizeOverflow {
@@ -162,7 +166,7 @@ where
         let completed = pass + 1;
         if convergence_criterion(
             completed,
-            &max_ranks,
+            stable_rank_passes,
             &max_errors,
             &global_pivots,
             options.min_sweeps,
@@ -339,9 +343,26 @@ where
     Ok(())
 }
 
+// A stable maximum can hide growth on a smaller cut, particularly when the
+// forward walk visits side branches but the return visits only the spine.
+// Keep one rank per cut, updated in place once per pass: O(edges) storage and
+// work, with no extra contractions, samples, or per-pass allocations.
+fn track_rank_stability(previous: &mut [usize], current: &[usize], stable: usize) -> usize {
+    let mut grew = false;
+    for (old, &new) in previous.iter_mut().zip(current) {
+        grew |= new > *old;
+        *old = new;
+    }
+    if grew {
+        1
+    } else {
+        stable.saturating_add(1)
+    }
+}
+
 fn convergence_criterion(
     completed: usize,
-    max_ranks: &[usize],
+    stable_rank_passes: usize,
     errors: &[f64],
     global_pivots: &[usize],
     min_sweeps: usize,
@@ -350,11 +371,7 @@ fn convergence_criterion(
     if min_sweeps == 0 || completed < min_sweeps || errors[completed - 1] > tolerance {
         return false;
     }
-    let baseline = max_ranks[completed - min_sweeps];
-    if max_ranks[(completed - min_sweeps)..completed]
-        .iter()
-        .any(|&rank| rank > baseline)
-    {
+    if stable_rank_passes < min_sweeps {
         return false;
     }
     global_pivots[(completed - min_sweeps)..completed]
