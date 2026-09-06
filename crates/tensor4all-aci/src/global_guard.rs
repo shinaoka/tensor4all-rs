@@ -118,7 +118,7 @@ where
             start,
             options.nsweeps_global_search,
             threshold,
-            |points: &[Vec<usize>]| -> crate::Result<Vec<f64>> {
+            |scan_site: Option<usize>, points: &[Vec<usize>]| -> crate::Result<Vec<f64>> {
                 let n_points = points.len();
                 // The walk hands us the current pivot with one site varied,
                 // so every candidate shares all coordinates except that site.
@@ -127,16 +127,12 @@ where
                 // scans) instead of re-deriving it per candidate; this is
                 // what keeps a walk at O(chi^2 * dim) per site scan rather
                 // than O(n_sites * chi^2) per point.
-                let split = if n_points < 2 {
-                    None
-                } else {
-                    (0..n_sites)
-                        .find(|&site| {
-                            let first = points[0][site];
-                            points[1..].iter().any(|point| point[site] != first)
-                        })
-                        .map(|site| site + 1)
-                };
+                //
+                // The walk now declares that site instead of leaving it to be
+                // recovered from the batch, which a batch of one point cannot
+                // support: the seed evaluation has no scan site and every
+                // site scan has exactly one.
+                let split = scan_site.map(|site| site + 1);
                 let input_len =
                     n_inputs
                         .checked_mul(n_points)

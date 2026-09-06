@@ -110,7 +110,7 @@ where
             start,
             options.nsweeps_global_search,
             threshold,
-            |points: &[Vec<usize>]| -> Result<Vec<f64>> {
+            |scan_site: Option<usize>, points: &[Vec<usize>]| -> Result<Vec<f64>> {
                 evaluated_points = checked_add_points(evaluated_points, points.len())?;
                 let retained_bytes = site_dims_bytes
                     .checked_add(start_storage_bytes)
@@ -121,7 +121,10 @@ where
                 input_evaluators
                     .enforce_guard_batch_budget_with_retained::<T>(points.len(), retained_bytes)?;
                 let coordinates = input_evaluators.expand_points(points)?;
-                let hint = input_evaluators.evaluation_hint(points);
+                // The walk declares which site it is scanning, so the hint no
+                // longer has to be inferred from the batch -- which a batch of
+                // one point cannot support at all.
+                let hint = input_evaluators.hint_for_scan_site(scan_site);
                 let input_values =
                     input_evaluators.evaluate_expanded::<T>(points, &coordinates, hint.clone())?;
                 let batch =
@@ -612,31 +615,6 @@ pub(crate) mod input_evaluator_debug_stats {
     }
 }
 
-/// Returns the one logical site that varies across a floating-zone batch.
-///
-/// Single-point or multi-site batches do not provide enough scan structure and
-/// deliberately fall back to the evaluator's ordinary center selection.
-fn sole_varying_site(points: &[Vec<usize>]) -> Option<usize> {
-    let first = points.first()?;
-    let mut varying = None;
-    for point in points.iter().skip(1) {
-        if point.len() != first.len() {
-            return None;
-        }
-        for (site, (left, right)) in first.iter().zip(point).enumerate() {
-            if left == right {
-                continue;
-            }
-            match varying {
-                None => varying = Some(site),
-                Some(known) if known == site => {}
-                Some(_) => return None,
-            }
-        }
-    }
-    varying
-}
-
 impl<'a, V: TreeAciNode> InputEvaluators<'a, V> {
     #[cfg(test)]
     pub(crate) fn new(
@@ -700,10 +678,11 @@ impl<'a, V: TreeAciNode> InputEvaluators<'a, V> {
         })
     }
 
+    /// Evaluates an unstructured batch, with no scan site to hint.
     pub(crate) fn evaluate<T: TreeAciScalar>(&mut self, points: &[Vec<usize>]) -> Result<Vec<T>> {
         self.enforce_guard_batch_budget::<T>(points.len())?;
         let coordinates = self.expand_points(points)?;
-        let hint = self.evaluation_hint(points);
+        let hint = self.hint_for_scan_site(None);
         self.evaluate_expanded(points, &coordinates, hint)
     }
 
@@ -797,9 +776,12 @@ impl<'a, V: TreeAciNode> InputEvaluators<'a, V> {
         &self.plan
     }
 
-    fn evaluation_hint(&self, points: &[Vec<usize>]) -> EvaluationHint<V> {
-        sole_varying_site(points)
-            .and_then(|site| self.node_order.get(site).cloned())
+    /// The evaluation hint for a floating-zone scan of `site`.
+    ///
+    /// `None` is the seed evaluation, which has no scan structure to declare
+    /// and falls back to the evaluator's ordinary centre selection.
+    fn hint_for_scan_site(&self, site: Option<usize>) -> EvaluationHint<V> {
+        site.and_then(|site| self.node_order.get(site).cloned())
             .map(EvaluationHint::around)
             .unwrap_or_default()
     }
@@ -888,7 +870,7 @@ impl<'a, V: TreeAciNode> GuardOutputEvaluator<'a, V> {
     ) -> Result<Vec<T>> {
         input_evaluators.enforce_guard_batch_budget::<T>(points.len())?;
         let coordinates = input_evaluators.expand_points(points)?;
-        let hint = input_evaluators.evaluation_hint(points);
+        let hint = input_evaluators.hint_for_scan_site(None);
         self.evaluate_expanded(input_evaluators, points, &coordinates, hint)
     }
 

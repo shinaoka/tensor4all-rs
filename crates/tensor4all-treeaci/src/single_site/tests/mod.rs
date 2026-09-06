@@ -158,15 +158,21 @@ fn the_exact_path_respects_the_working_budget() {
     };
 
     // The four-point input and output buffers coexist: 2 * 4 * 8 = 64 bytes.
+    // The element ceilings are pinned so that this budget charges only those
+    // buffers; derived ceilings would follow the budget down and refuse the
+    // four-element core during preparation instead.
     let generous = TreeAciOptions::<usize> {
         max_working_bytes: 64,
+        max_local_matrix_elements: Some(1 << 24),
+        max_core_elements: Some(1 << 24),
+        max_frame_elements: Some(1 << 24),
         ..TreeAciOptions::default()
     };
     assert!(evaluate_single_site(std::slice::from_ref(&tree), &generous, &mut square).is_ok());
 
     let tight = TreeAciOptions::<usize> {
         max_working_bytes: 63,
-        ..TreeAciOptions::default()
+        ..generous.clone()
     };
     let error = evaluate_single_site(std::slice::from_ref(&tree), &tight, &mut square)
         .expect_err("a 63-byte ceiling must reject two 32-byte buffers");

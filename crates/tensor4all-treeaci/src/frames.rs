@@ -157,20 +157,28 @@ fn grouped_gemm_descriptor_bytes(incoming_dims: &[usize]) -> Result<usize> {
         })
 }
 
-/// Whether `elements` scalars plus `extra_bytes` of metadata fit the
-/// configured working-byte budget, without raising an error.
+/// Whether `elements` scalars plus `extra_bytes` of metadata fit what is left
+/// of the working-byte budget after `reserved_bytes`, without raising an
+/// error.
 ///
 /// The arbitrary-degree routing contract needs to *choose* a route rather
 /// than reject a request, so an overflowing or over-budget estimate reports
 /// `false` here and the caller falls back to the scalar path.
+///
+/// `reserved_bytes` is what the *caller's* own live buffers already claim for
+/// the duration of the call, so the route chosen here is affordable in the
+/// aggregate and not merely in isolation; see
+/// [`InputFrameStore::candidate_frames_for_edge`].
 fn frame_working_elements_fit<T: TreeAciScalar, V: TreeAciNode>(
     problem: &PreparedTreeProblem<V>,
     elements: usize,
     extra_bytes: usize,
+    reserved_bytes: usize,
 ) -> bool {
     elements
         .checked_mul(size_of::<T>())
         .and_then(|bytes| bytes.checked_add(extra_bytes))
+        .and_then(|bytes| bytes.checked_add(reserved_bytes))
         .is_some_and(|bytes| bytes <= problem.max_working_bytes)
 }
 
@@ -1221,11 +1229,18 @@ impl<T: TreeAciScalar> InputFrameStore<T> {
     /// [`Self::candidate_frames_for_edge`] will actually take: the batched
     /// kernel's live buffers for one and two incoming components, and for
     /// three or more the batched charge when the complete Cartesian cross
-    /// fits `max_working_bytes` and the per-candidate scalar charge when it
-    /// does not (see
+    /// fits the budget left after `reserved_bytes`, and the per-candidate
+    /// scalar charge when it does not (see
     /// [`Self::candidate_frames_for_edge_multi_incoming`]'s routing
     /// contract). This keeps the local update's pre-flight budget and the
     /// kernel's own routing decision from disagreeing.
+    ///
+    /// # Arguments
+    ///
+    /// * `reserved_bytes` - what the caller's own live buffers claim for the
+    ///   duration of the candidate-frame call, and therefore what is *not*
+    ///   available to the batched route. Pass the same value to
+    ///   [`Self::candidate_frames_for_edge`], or the two will disagree.
     ///
     /// # Errors
     ///
@@ -1238,6 +1253,7 @@ impl<T: TreeAciScalar> InputFrameStore<T> {
         input: usize,
         directed_edge: DirectedEdgeId,
         candidate_sets: &CandidateSets,
+        reserved_bytes: usize,
     ) -> Result<usize> {
         let directed =
             problem
@@ -1337,6 +1353,7 @@ impl<T: TreeAciScalar> InputFrameStore<T> {
                                         problem,
                                         *elements,
                                         descriptor_bytes,
+                                        reserved_bytes,
                                     )
                                 },
                             )
@@ -1416,6 +1433,25 @@ impl<T: TreeAciScalar> InputFrameStore<T> {
     /// this path's cache semantics identical to the scalar
     /// [`Self::candidate_frame`] path it replaces for other workloads or
     /// call patterns where reuse may still occur.
+    /// Candidate frames for one directed edge, packed bond-major.
+    ///
+    /// # Arguments
+    ///
+    /// * `reserved_bytes` - bytes of `max_working_bytes` the caller's own live
+    ///   buffers hold for the duration of this call. An arbitrary-degree edge
+    ///   routes to its batched kernel only when that kernel's live buffers fit
+    ///   the budget that remains, so a caller already holding most of the
+    ///   budget gets the cheaper-in-memory scalar route instead of an
+    ///   aggregate overrun. Pass `0` when nothing else is live. The same value
+    ///   must reach
+    ///   [`Self::enumerated_candidate_frame_scratch_elements`], which is what
+    ///   pre-charges this call.
+    ///
+    /// # Errors
+    ///
+    /// Propagates every failure of the selected kernel, including
+    /// [`TreeAciError::InternalInvariant`] for an unknown edge or input and
+    /// [`TreeAciError::SizeOverflow`] on checked dimension arithmetic.
     pub(crate) fn candidate_frames_for_edge<V: TreeAciNode>(
         &self,
         inputs: &[TreeTN<IdxTensor, V>],
@@ -1423,6 +1459,7 @@ impl<T: TreeAciScalar> InputFrameStore<T> {
         input: usize,
         directed_edge: DirectedEdgeId,
         candidates: &[ComponentSample],
+        reserved_bytes: usize,
     ) -> Result<PackedCandidateFrames<T>> {
         self.candidate_frames_for_edge_with_layout(
             inputs,
@@ -1431,9 +1468,17 @@ impl<T: TreeAciScalar> InputFrameStore<T> {
             directed_edge,
             candidates,
             PackedCandidateFrameLayout::BondByCandidate,
+            reserved_bytes,
         )
     }
 
+    /// The candidate-major counterpart of
+    /// [`Self::candidate_frames_for_edge`], with the same `reserved_bytes`
+    /// contract.
+    ///
+    /// # Errors
+    ///
+    /// Propagates every failure of the selected kernel.
     pub(crate) fn candidate_frames_for_edge_rows<V: TreeAciNode>(
         &self,
         inputs: &[TreeTN<IdxTensor, V>],
@@ -1441,6 +1486,7 @@ impl<T: TreeAciScalar> InputFrameStore<T> {
         input: usize,
         directed_edge: DirectedEdgeId,
         candidates: &[ComponentSample],
+        reserved_bytes: usize,
     ) -> Result<PackedCandidateFrames<T>> {
         self.candidate_frames_for_edge_with_layout(
             inputs,
@@ -1449,9 +1495,11 @@ impl<T: TreeAciScalar> InputFrameStore<T> {
             directed_edge,
             candidates,
             PackedCandidateFrameLayout::CandidateByBond,
+            reserved_bytes,
         )
     }
 
+    #[allow(clippy::too_many_arguments)]
     fn candidate_frames_for_edge_with_layout<V: TreeAciNode>(
         &self,
         inputs: &[TreeTN<IdxTensor, V>],
@@ -1460,6 +1508,7 @@ impl<T: TreeAciScalar> InputFrameStore<T> {
         directed_edge: DirectedEdgeId,
         candidates: &[ComponentSample],
         layout: PackedCandidateFrameLayout,
+        reserved_bytes: usize,
     ) -> Result<PackedCandidateFrames<T>> {
         let directed =
             problem
@@ -1486,6 +1535,7 @@ impl<T: TreeAciScalar> InputFrameStore<T> {
                 directed_edge,
                 candidates,
                 layout,
+                reserved_bytes,
             );
         }
         if directed.incoming_to_from.is_empty() {
@@ -1749,9 +1799,9 @@ impl<T: TreeAciScalar> InputFrameStore<T> {
     /// * the **batched** route, [`incoming_batch_matrix`], when the group's
     ///   complete Cartesian cross is no larger than the number of candidates
     ///   the caller actually asked for *and* every simultaneously live buffer
-    ///   of that cross fits `max_working_bytes`
-    ///   ([`multi_incoming_scratch_elements`] plus
-    ///   [`grouped_gemm_descriptor_bytes`]);
+    ///   of that cross fits what is left of `max_working_bytes` after the
+    ///   caller's own `reserved_bytes` ([`multi_incoming_scratch_elements`]
+    ///   plus [`grouped_gemm_descriptor_bytes`]);
     /// * the **scalar** route, the same
     ///   [`contract_prepared_core_slices`] contraction
     ///   [`Self::candidate_frame`] performs, otherwise.
@@ -1763,12 +1813,17 @@ impl<T: TreeAciScalar> InputFrameStore<T> {
     /// complete cross, so production groups take the batched route whenever
     /// their intermediates are affordable. The budget condition selects a
     /// route instead of raising a limit error, so a tight budget degrades to
-    /// the previous per-candidate cost rather than failing.
+    /// the previous per-candidate cost rather than failing. It is evaluated
+    /// against the budget that remains after the caller's `reserved_bytes`,
+    /// so this degradation happens at exactly the boundary the caller's own
+    /// aggregate pre-flight charges: the two cannot disagree in the direction
+    /// that would overrun the budget (#726).
     ///
     /// Cache semantics are unchanged from the scalar route this replaces:
     /// three-or-more-incoming candidates are still never cached, because
     /// their exact identity would need an unbounded vector key
     /// ([`Self::candidate_cache_key`]).
+    #[allow(clippy::too_many_arguments)]
     fn candidate_frames_for_edge_multi_incoming<V: TreeAciNode>(
         &self,
         inputs: &[TreeTN<IdxTensor, V>],
@@ -1777,6 +1832,7 @@ impl<T: TreeAciScalar> InputFrameStore<T> {
         directed_edge: DirectedEdgeId,
         candidates: &[ComponentSample],
         layout: PackedCandidateFrameLayout,
+        reserved_bytes: usize,
     ) -> Result<PackedCandidateFrames<T>> {
         let directed =
             problem
@@ -1876,7 +1932,12 @@ impl<T: TreeAciScalar> InputFrameStore<T> {
             let scratch = multi_incoming_scratch_elements(outgoing_dim, &incoming_dims, &counts)?;
             let descriptor_bytes = grouped_gemm_descriptor_bytes(&incoming_dims)?;
             let batched = cross <= indices.len()
-                && frame_working_elements_fit::<T, V>(problem, scratch, descriptor_bytes);
+                && frame_working_elements_fit::<T, V>(
+                    problem,
+                    scratch,
+                    descriptor_bytes,
+                    reserved_bytes,
+                );
 
             if !batched {
                 #[cfg(test)]

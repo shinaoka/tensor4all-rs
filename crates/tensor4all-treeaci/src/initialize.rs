@@ -82,7 +82,6 @@ pub(crate) fn validate_initial_guess<T: TreeAciScalar, V: TreeAciNode>(
     guess: &TreeTN<IdxTensor, V>,
     reference: &TreeTN<IdxTensor, V>,
     problem: &PreparedTreeProblem<V>,
-    options: &TreeAciOptions<V>,
 ) -> Result<()> {
     guess
         .validate_tree()
@@ -112,7 +111,7 @@ pub(crate) fn validate_initial_guess<T: TreeAciScalar, V: TreeAciNode>(
                 message: format!("missing tensor at node {node:?}"),
             })?;
         let elements = checked_product(tensor.indices().iter().map(IndexLike::dim), "guess core")?;
-        enforce_limit("core elements", elements, options.max_core_elements)?;
+        enforce_limit("core elements", elements, problem.max_core_elements)?;
         validate_initial_guess_scalar_kind::<T>(tensor)?;
     }
     guess
@@ -195,7 +194,7 @@ pub(crate) fn build_random_output<T: TreeAciScalar, V: TreeAciNode>(
             )?);
         }
         let elements = checked_product(indices.iter().map(IndexLike::dim), "output core")?;
-        enforce_limit("core elements", elements, options.max_core_elements)?;
+        enforce_limit("core elements", elements, problem.max_core_elements)?;
         let values = (0..elements)
             .map(|_| {
                 let value: f64 = StandardNormal.sample(&mut rng);

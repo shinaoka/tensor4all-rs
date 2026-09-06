@@ -84,7 +84,7 @@ where
     enforce_limit(
         "local matrix elements",
         point_count,
-        options.max_local_matrix_elements,
+        problem.max_local_matrix_elements,
     )?;
     let input_value_elements =
         inputs
@@ -96,42 +96,42 @@ where
     let max_cut_rank = (0..inputs.len()).try_fold(0usize, |max_rank, input| {
         Ok::<usize, TreeAciError>(max_rank.max(frames.bond_dim(input, forward)?))
     })?;
-    let candidate_frame_elements = row_count
-        .checked_add(col_count)
-        .and_then(|count| count.checked_mul(max_cut_rank))
-        // Candidate vectors and their packed BLAS matrices coexist for one
-        // input at a time. Other inputs are streamed and dropped.
-        .and_then(|count| count.checked_mul(2))
-        .ok_or(TreeAciError::SizeOverflow {
-            context: "candidate frame working elements",
-        })?;
+    // Everything charged here stays live while candidate frames are built, so
+    // it is what the candidate-frame kernels may *not* spend.
+    let reserved_bytes = reserved_working_bytes::<T>(
+        input_value_elements,
+        point_count,
+        row_count,
+        col_count,
+        max_cut_rank,
+    )?;
     let candidate_frame_scratch =
         inputs
             .iter()
             .enumerate()
             .try_fold(0usize, |peak, (input, _)| {
                 let row_scratch = frames.enumerated_candidate_frame_scratch_elements(
-                    problem, input, forward, candidates,
+                    problem,
+                    input,
+                    forward,
+                    candidates,
+                    reserved_bytes,
                 )?;
                 let col_scratch = frames.enumerated_candidate_frame_scratch_elements(
-                    problem, input, reverse, candidates,
+                    problem,
+                    input,
+                    reverse,
+                    candidates,
+                    reserved_bytes,
                 )?;
                 Ok::<usize, TreeAciError>(peak.max(row_scratch).max(col_scratch))
             })?;
-    let working_elements = input_value_elements
-        // One point-sized output/product buffer coexists with input values.
-        .checked_add(point_count)
-        .and_then(|count| count.checked_add(candidate_frame_elements))
-        .and_then(|count| count.checked_add(candidate_frame_scratch))
+    let working_bytes = candidate_frame_scratch
+        .checked_mul(size_of::<T>())
+        .and_then(|bytes| bytes.checked_add(reserved_bytes))
         .ok_or(TreeAciError::SizeOverflow {
-            context: "local update working elements",
+            context: "local matrix working bytes",
         })?;
-    let working_bytes =
-        working_elements
-            .checked_mul(size_of::<T>())
-            .ok_or(TreeAciError::SizeOverflow {
-                context: "local matrix working bytes",
-            })?;
     enforce_limit("working bytes", working_bytes, options.max_working_bytes)?;
     let factor_rank_bound = options
         .max_bond_dim
@@ -151,8 +151,8 @@ where
             .ok_or(TreeAciError::SizeOverflow {
                 context: "right local factor elements",
             })?;
-    enforce_limit("core elements", left_elements, options.max_core_elements)?;
-    enforce_limit("core elements", right_elements, options.max_core_elements)?;
+    enforce_limit("core elements", left_elements, problem.max_core_elements)?;
+    enforce_limit("core elements", right_elements, problem.max_core_elements)?;
 
     let mut input_values = vec![T::default(); input_value_elements];
     #[cfg(test)]
@@ -179,6 +179,7 @@ where
                 input,
                 forward,
                 &row_candidates,
+                reserved_bytes,
             )?;
             #[cfg(test)]
             crate::state::profile_debug_stats::record(|stats| {
@@ -192,6 +193,7 @@ where
                 input,
                 reverse,
                 &col_candidates,
+                reserved_bytes,
             )?;
             #[cfg(test)]
             crate::state::profile_debug_stats::record(|stats| {
@@ -365,6 +367,52 @@ where
         #[cfg(test)]
         local_values: retained_local_values,
     })
+}
+
+/// Bytes of `max_working_bytes` that stay live for the whole candidate-frame
+/// phase of one edge update.
+///
+/// This is the reservation the candidate-frame kernels are told about, so that
+/// an arbitrary-degree edge whose batched cross fits the budget on its own,
+/// but not once these buffers are counted, degrades to the scalar route on
+/// both sides of the contract instead of being refused by the pre-flight and
+/// then batched anyway by the kernel (#726). It is also the constant part of
+/// the pre-flight charge, so both uses read the same rule from one place.
+///
+/// # Arguments
+///
+/// * `input_value_elements` - one per input per point, all live at once.
+/// * `point_count` - the one point-sized output/product buffer that coexists
+///   with the input values.
+/// * `row_count`, `col_count`, `max_cut_rank` - the packed candidate frames of
+///   both sides, counted twice because a side's candidate vectors and their
+///   packed BLAS matrix coexist for one input at a time. Other inputs are
+///   streamed and dropped.
+///
+/// # Errors
+///
+/// Returns [`TreeAciError::SizeOverflow`] when the charge does not fit `usize`.
+pub(crate) fn reserved_working_bytes<T: TreeAciScalar>(
+    input_value_elements: usize,
+    point_count: usize,
+    row_count: usize,
+    col_count: usize,
+    max_cut_rank: usize,
+) -> Result<usize> {
+    let candidate_frame_elements = row_count
+        .checked_add(col_count)
+        .and_then(|count| count.checked_mul(max_cut_rank))
+        .and_then(|count| count.checked_mul(2))
+        .ok_or(TreeAciError::SizeOverflow {
+            context: "candidate frame working elements",
+        })?;
+    input_value_elements
+        .checked_add(point_count)
+        .and_then(|count| count.checked_add(candidate_frame_elements))
+        .and_then(|count| count.checked_mul(size_of::<T>()))
+        .ok_or(TreeAciError::SizeOverflow {
+            context: "local update working elements",
+        })
 }
 
 fn select_pivot_samples(

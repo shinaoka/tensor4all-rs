@@ -40,7 +40,9 @@ fn rank_deficient_two_node_tree(sites: [DynIndex; 2]) -> TreeTN<IdxTensor, usize
     TreeTN::from_tensors(vec![left, right], vec![0, 1]).unwrap()
 }
 
-fn full_rank_chain_guess(n_sites: usize, chi: usize) -> TreeTN<IdxTensor, usize> {
+/// Shared with `global_guard::tests`, which measures the Guard's evaluation
+/// shape on the same 32-site high-rank chain this module profiles.
+pub(crate) fn full_rank_chain_guess(n_sites: usize, chi: usize) -> TreeTN<IdxTensor, usize> {
     let sites = (0..n_sites)
         .map(|_| DynIndex::new_dyn(2))
         .collect::<Vec<_>>();
@@ -394,6 +396,245 @@ fn profile_high_rank_chain_phases_and_candidate_cache() {
     }
 }
 
+/// Deterministic analytic core value, matching the `aci_scaling` benchmark's
+/// fixture so this profile attributes the same workload the #718 gate timed.
+fn spider_core_value(input: usize, node: usize, flat: usize, dims: &[usize]) -> f64 {
+    let mut phase = 0.173 * (input as f64 + 1.0) * (node as f64 + 1.3) + 0.31 * 0.5;
+    let mut coordinates = Vec::with_capacity(dims.len());
+    let mut rest = flat;
+    for &dim in dims {
+        coordinates.push((rest % dim) as f64);
+        rest /= dim;
+    }
+    for (axis, &coordinate) in coordinates.iter().enumerate() {
+        phase += (0.191 + 0.037 * axis as f64) * coordinate * (axis as f64 + 1.7);
+    }
+    let mut cross = 0.0;
+    for (axis, &left) in coordinates.iter().enumerate() {
+        for (other, &right) in coordinates.iter().enumerate().skip(axis + 1) {
+            cross += 0.071 * left * right * (axis + other + 2) as f64;
+        }
+    }
+    (phase.sin() + 0.5 * (phase + cross).cos()) / (1.0 + 0.05 * flat as f64)
+}
+
+fn spider_dense_tensor(indices: Vec<DynIndex>, input: usize, node: usize) -> IdxTensor {
+    let dims: Vec<usize> = indices.iter().map(IndexLike::dim).collect();
+    let size: usize = dims.iter().product();
+    IdxTensor::from_dense(
+        indices,
+        (0..size)
+            .map(|flat| spider_core_value(input, node, flat, &dims))
+            .collect::<Vec<f64>>(),
+    )
+    .unwrap()
+}
+
+/// One hub with `arm_bonds.len()` arms of `arm_length` sites each, the same
+/// shape the `aci_scaling` unequal-incident-bond case builds.
+/// Shared with `global_guard::tests`, which measures the Guard's evaluation
+/// cost on this branched fixture against the chain's.
+pub(crate) fn spider_tree(
+    arm_bonds: &[usize],
+    arm_length: usize,
+    chi: usize,
+    input: usize,
+    sites: &[DynIndex],
+) -> TreeTN<IdxTensor, usize> {
+    let arms = arm_bonds.len();
+    let n_sites = 1 + arms * arm_length;
+    assert_eq!(sites.len(), n_sites);
+    let exact_cut_rank = |outer_sites: usize| {
+        let inner = n_sites - outer_sites;
+        2usize.saturating_pow(outer_sites.min(inner) as u32).max(1)
+    };
+    let hub_bonds: Vec<DynIndex> = arm_bonds
+        .iter()
+        .map(|&dim| DynIndex::new_dyn(dim.min(exact_cut_rank(arm_length)).max(1)))
+        .collect();
+    let arm_bond_indices: Vec<Vec<DynIndex>> = (0..arms)
+        .map(|_| {
+            (1..arm_length)
+                .map(|position| DynIndex::new_dyn(chi.min(exact_cut_rank(arm_length - position))))
+                .collect()
+        })
+        .collect();
+
+    let mut hub_indices = vec![sites[0].clone()];
+    hub_indices.extend(hub_bonds.iter().cloned());
+    let mut tensors = vec![spider_dense_tensor(hub_indices, input, 0)];
+    for arm in 0..arms {
+        for position in 0..arm_length {
+            let node = 1 + arm * arm_length + position;
+            let mut indices = vec![sites[node].clone()];
+            if position == 0 {
+                indices.push(hub_bonds[arm].clone());
+            } else {
+                indices.push(arm_bond_indices[arm][position - 1].clone());
+            }
+            if position + 1 < arm_length {
+                indices.push(arm_bond_indices[arm][position].clone());
+            }
+            tensors.push(spider_dense_tensor(indices, input, node));
+        }
+    }
+    // Rescale the hub so the dense maximum modulus is one, exactly as the
+    // benchmark fixture does: the two runs must see the same magnitudes for
+    // the scaled tolerance to mean the same thing.
+    let tree = TreeTN::from_tensors(tensors, (0..n_sites).collect()).unwrap();
+    let scale = tree.to_dense().unwrap().maxabs().unwrap();
+    assert!(scale.is_finite() && scale > 0.0);
+    let rescaled = (0..n_sites)
+        .map(|name| {
+            let tensor = tree.tensor(tree.node_index(&name).unwrap()).unwrap();
+            if name == 0 {
+                IdxTensor::from_dense(
+                    tensor.indices().to_vec(),
+                    tensor
+                        .to_vec::<f64>()
+                        .unwrap()
+                        .into_iter()
+                        .map(|value| value / scale)
+                        .collect::<Vec<f64>>(),
+                )
+                .unwrap()
+            } else {
+                tensor.clone()
+            }
+        })
+        .collect::<Vec<_>>();
+    TreeTN::from_tensors(rescaled, (0..n_sites).collect()).unwrap()
+}
+
+/// Opt-in phase attribution for the unequal incident-bond asymmetry the #718
+/// scaling gate found (issue #727): at coordination 4 and a fixed hub bond
+/// product, an unequal layout costs far more per evaluated point than an equal
+/// one. Run with `--ignored --nocapture`.
+///
+/// The layouts share the site count, the arm length, the arm bond dimension,
+/// and the hub bond *product*, so `outgoing_dim * product(incoming bonds)` on
+/// every outward hub arc is identical and any difference in cost is not
+/// topology-required work.
+#[test]
+#[ignore]
+fn profile_unequal_incident_bonds_at_coordination_four() {
+    const ARM_LENGTH: usize = 3;
+    const ARM_CHI: usize = 4;
+    const LAYOUTS: [(&str, [usize; 4]); 3] = [
+        ("equal_4x4x4x4", [4, 4, 4, 4]),
+        ("unequal_2x4x8x4", [2, 4, 8, 4]),
+        ("unequal_8x4x2x4", [8, 4, 2, 4]),
+    ];
+
+    for (name, bonds) in LAYOUTS {
+        assert_eq!(bonds.iter().product::<usize>(), 256);
+        let sites: Vec<DynIndex> = (0..bonds.len() * ARM_LENGTH + 1)
+            .map(|_| DynIndex::new_dyn(2))
+            .collect();
+        let inputs: Vec<_> = (0..2)
+            .map(|input| spider_tree(&bonds, ARM_LENGTH, ARM_CHI, input, &sites))
+            .collect();
+        // The benchmark this profile attributes runs the default options, so
+        // the Guard is on unless the operator turns it off.
+        let enable_global_guard =
+            std::env::var("T4A_TREEACI_DISABLE_PROFILE_GUARD").as_deref() != Ok("1");
+        let options = TreeAciOptions {
+            tolerance: 1.0e-8,
+            max_sweeps: 12,
+            min_sweeps: 2,
+            enable_global_guard,
+            ..TreeAciOptions::default()
+        };
+
+        crate::frames::candidate_debug_stats::reset();
+        crate::frames::debug_stats::reset();
+        crate::frames::multi_incoming_debug_stats::reset();
+        super::profile_debug_stats::reset();
+        let initialize_started = std::time::Instant::now();
+        let mut state = TreeAciState::<f64, usize>::initialize(&inputs, &options).unwrap();
+        let initialize_elapsed = initialize_started.elapsed();
+        let sweep_started = std::time::Instant::now();
+        let history = run_local_sweeps(&mut state, &options, &mut |batch, output| {
+            for (point, value) in output.iter_mut().enumerate() {
+                *value = batch.get(0, point)? * batch.get(1, point)?;
+            }
+            Ok(())
+        })
+        .unwrap();
+        let sweep_elapsed = sweep_started.elapsed();
+        let profile = super::profile_debug_stats::snapshot();
+        let (base_frame_bytes, candidate_cache_entries, candidate_cache_bytes) =
+            state.input_frames.cache_debug_totals();
+
+        eprintln!(
+            "spider {name}: initialize={initialize_elapsed:?} [prepare={:?}, output={:?}, bootstrap={:?}, frames={:?}], sweeps={sweep_elapsed:?} [proposals={:?}: prepare={:?}, input_frames={:?} {{row={:?}, col={:?}, pack={:?}, matmul={:?}, scatter={:?}}}, operator={:?}, luci={:?}; output_staging={:?}, sample_staging={:?}, frame_extension={:?}, commits={}], sweeps_completed={}",
+            profile.preparation,
+            profile.output,
+            profile.bootstrap,
+            profile.frames,
+            profile.proposals,
+            profile.local_preparation,
+            profile.local_input_frames,
+            profile.local_row_frames,
+            profile.local_col_frames,
+            profile.local_frame_pack,
+            profile.local_frame_matmul,
+            profile.local_frame_scatter,
+            profile.operator,
+            profile.luci,
+            profile.output_staging,
+            profile.sample_staging,
+            profile.frame_extension,
+            profile.commits,
+            history.max_ranks.len(),
+        );
+        eprintln!(
+            "spider {name} work counters: evaluated_points={}, max_rank={:?}, packed_frame_values={}, candidate hits/misses={}/{}, multi_incoming groups batched/scalar={}/{}, frame compute calls={} (scalar={}, batched={}), core_element_reads={}",
+            history.evaluated_points,
+            history.max_ranks.last(),
+            profile.local_packed_frame_values,
+            crate::frames::candidate_debug_stats::hits(),
+            crate::frames::candidate_debug_stats::misses(),
+            crate::frames::multi_incoming_debug_stats::batched_groups(),
+            crate::frames::multi_incoming_debug_stats::scalar_groups(),
+            crate::frames::debug_stats::compute_calls(),
+            crate::frames::debug_stats::scalar_compute_calls(),
+            crate::frames::debug_stats::batched_compute_calls(),
+            crate::frames::debug_stats::core_element_reads(),
+        );
+        eprintln!(
+            "spider {name} global guard enabled={enable_global_guard}: search={:?}, injection={:?} {{candidate_clone={:?}, projection={:?}, output_padding={:?}, frame_extension={:?}}}, input_eval={:?}/{} calls/{} scalar results, output_eval={:?}/{} calls/{} scalar results",
+            profile.global_guard,
+            profile.global_injection,
+            profile.guard_candidate_clone,
+            profile.guard_projection,
+            profile.guard_output_padding,
+            profile.guard_frame_extension,
+            profile.guard_input_evaluation,
+            profile.guard_input_calls,
+            profile.guard_input_points,
+            profile.guard_output_evaluation,
+            profile.guard_output_calls,
+            profile.guard_output_points,
+        );
+        eprintln!(
+            "spider {name} frame extension: {:?} over {} calls {{setup={:?}, scan={:?} across {} edge-input visits (reused={}, grown={}), compute={:?}, rebuild={:?}, finalize={:?}, old_values_copied={}, new_values_copied={}}}, retained base={base_frame_bytes} bytes, candidate_cache={candidate_cache_entries} entries/{candidate_cache_bytes} bytes",
+            profile.frame_extension,
+            profile.frame_extension_calls,
+            profile.frame_extension_setup,
+            profile.frame_extension_scan,
+            profile.frame_extension_scanned_edges,
+            profile.frame_extension_reused_edges,
+            profile.frame_extension_grown_edges,
+            profile.frame_extension_compute,
+            profile.frame_extension_rebuild,
+            profile.frame_extension_finalize,
+            profile.frame_extension_old_values_copied,
+            profile.frame_extension_new_values_copied,
+        );
+    }
+}
+
 #[test]
 fn unseeded_initialization_defers_numeric_canonicalization() {
     let sites = [DynIndex::new_dyn(2), DynIndex::new_dyn(2)];
@@ -403,7 +644,7 @@ fn unseeded_initialization_defers_numeric_canonicalization() {
         rng_seed: 7,
         ..TreeAciOptions::default()
     };
-    let problem = prepare_problem(&inputs, &options).unwrap();
+    let problem = prepare_problem::<f64, _>(&inputs, &options).unwrap();
     let algebraic_bounds = algebraic_edge_bounds(&problem).unwrap();
     let edge_ranks = initial_edge_ranks(&inputs, &problem, &options, &algebraic_bounds).unwrap();
     let raw =
@@ -439,7 +680,7 @@ fn explicit_guess_rank_and_resource_limits_are_rejected() {
             &inputs,
             &TreeAciOptions {
                 initial_guess: Some(guess),
-                max_core_elements: 3,
+                max_core_elements: Some(3),
                 ..TreeAciOptions::default()
             }
         ),

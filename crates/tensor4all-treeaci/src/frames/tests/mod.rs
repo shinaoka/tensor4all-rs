@@ -30,7 +30,8 @@ fn two_node_tree<T: TreeAciScalar + From<f64>>() -> TreeTN<IdxTensor, usize> {
 fn assert_two_node_frames<T: TreeAciScalar + From<f64> + PartialEq + std::fmt::Debug>() {
     let input = two_node_tree::<T>();
     let problem =
-        prepare_problem(std::slice::from_ref(&input), &TreeAciOptions::default()).unwrap();
+        prepare_problem::<f64, _>(std::slice::from_ref(&input), &TreeAciOptions::default())
+            .unwrap();
     let (arena, _) = SampleArena::from_global_seeds(&problem, &[vec![0, 0], vec![1, 1]]).unwrap();
     let frames = InputFrameStore::<T>::from_samples(&[input], &problem, &arena).unwrap();
 
@@ -78,7 +79,8 @@ fn y_tree<T: TreeAciScalar + From<f64>>() -> TreeTN<IdxTensor, usize> {
 fn assert_y_frames<T: TreeAciScalar + From<f64>>() {
     let input = y_tree::<T>();
     let problem =
-        prepare_problem(std::slice::from_ref(&input), &TreeAciOptions::default()).unwrap();
+        prepare_problem::<f64, _>(std::slice::from_ref(&input), &TreeAciOptions::default())
+            .unwrap();
     let seeds = [vec![0, 0, 0, 0], vec![0, 1, 1, 1]];
     let (arena, active) = SampleArena::from_global_seeds(&problem, &seeds).unwrap();
     let frames = InputFrameStore::<T>::from_samples(&[input], &problem, &arena).unwrap();
@@ -120,7 +122,8 @@ fn multiple_physical_axes_use_first_axis_fast_flattening() {
     let right = IdxTensor::from_dense(vec![bond, DynIndex::new_dyn(1)], vec![1.0, 1.0]).unwrap();
     let input = TreeTN::from_tensors(vec![left, right], vec![0, 1]).unwrap();
     let problem =
-        prepare_problem(std::slice::from_ref(&input), &TreeAciOptions::default()).unwrap();
+        prepare_problem::<f64, _>(std::slice::from_ref(&input), &TreeAciOptions::default())
+            .unwrap();
     let (arena, _) = SampleArena::from_global_seeds(&problem, &[vec![4, 0]]).unwrap();
     let frames = InputFrameStore::<f64>::from_samples(&[input], &problem, &arena).unwrap();
 
@@ -131,7 +134,8 @@ fn multiple_physical_axes_use_first_axis_fast_flattening() {
 fn frames_remain_addressable_after_active_set_replacement() {
     let input = two_node_tree::<f64>();
     let problem =
-        prepare_problem(std::slice::from_ref(&input), &TreeAciOptions::default()).unwrap();
+        prepare_problem::<f64, _>(std::slice::from_ref(&input), &TreeAciOptions::default())
+            .unwrap();
     let (arena, mut active) =
         SampleArena::from_global_seeds(&problem, &[vec![0, 0], vec![1, 1]]).unwrap();
     let old_id = active.ids[0][0];
@@ -150,7 +154,8 @@ fn frames_remain_addressable_after_active_set_replacement() {
 fn extend_matches_a_full_rebuild_on_the_grown_arena() {
     let input = y_tree::<f64>();
     let problem =
-        prepare_problem(std::slice::from_ref(&input), &TreeAciOptions::default()).unwrap();
+        prepare_problem::<f64, _>(std::slice::from_ref(&input), &TreeAciOptions::default())
+            .unwrap();
     let seed0 = vec![0, 0, 0, 0];
     let seed1 = vec![0, 1, 1, 1];
     let (mut arena, mut candidates) =
@@ -195,7 +200,8 @@ fn extend_new_samples_matches_full_rebuild_on_chain_and_branch() {
 
     for (input, seed0, seed1) in cases {
         let problem =
-            prepare_problem(std::slice::from_ref(&input), &TreeAciOptions::default()).unwrap();
+            prepare_problem::<f64, _>(std::slice::from_ref(&input), &TreeAciOptions::default())
+                .unwrap();
         let (mut arena, mut candidates) =
             SampleArena::from_global_seeds(&problem, std::slice::from_ref(&seed0)).unwrap();
         let initial =
@@ -247,7 +253,8 @@ fn extend_new_samples_matches_full_rebuild_on_chain_and_branch() {
 fn extend_new_samples_computes_only_new_ranges() {
     let input = chain5_tree_for_dedup_regression();
     let problem =
-        prepare_problem(std::slice::from_ref(&input), &TreeAciOptions::default()).unwrap();
+        prepare_problem::<f64, _>(std::slice::from_ref(&input), &TreeAciOptions::default())
+            .unwrap();
     let (mut arena, _candidates) =
         SampleArena::from_global_seeds(&problem, &[vec![0, 0, 0, 0, 0]]).unwrap();
     let initial =
@@ -309,7 +316,8 @@ fn paired_release_measurement_for_cut_local_extension() {
 
     let input = chain5_tree_for_dedup_regression();
     let problem =
-        prepare_problem(std::slice::from_ref(&input), &TreeAciOptions::default()).unwrap();
+        prepare_problem::<f64, _>(std::slice::from_ref(&input), &TreeAciOptions::default())
+            .unwrap();
     let (mut arena, _candidates) =
         SampleArena::from_global_seeds(&problem, &[vec![0, 0, 0, 0, 0]]).unwrap();
     let initial =
@@ -431,7 +439,8 @@ fn paired_release_measurement_for_cut_local_extension() {
 fn extend_recomputes_only_the_newly_interned_samples() {
     let input = y_tree::<f64>();
     let problem =
-        prepare_problem(std::slice::from_ref(&input), &TreeAciOptions::default()).unwrap();
+        prepare_problem::<f64, _>(std::slice::from_ref(&input), &TreeAciOptions::default())
+            .unwrap();
     let seed0 = vec![0, 0, 0, 0];
     let seed1 = vec![0, 1, 1, 1];
     let (mut arena, mut candidates) =
@@ -474,7 +483,8 @@ fn extend_recomputes_only_the_newly_interned_samples() {
 fn extend_reuses_the_same_cores_allocation_instead_of_cloning_it() {
     let input = y_tree::<f64>();
     let problem =
-        prepare_problem(std::slice::from_ref(&input), &TreeAciOptions::default()).unwrap();
+        prepare_problem::<f64, _>(std::slice::from_ref(&input), &TreeAciOptions::default())
+            .unwrap();
     let seed0 = vec![0, 0, 0, 0];
     let seed1 = vec![0, 1, 1, 1];
     let (mut arena, mut candidates) =
@@ -504,7 +514,8 @@ fn extend_reuses_the_same_cores_allocation_instead_of_cloning_it() {
 fn candidate_frame_hits_the_cache_on_a_repeated_lookup() {
     let input = two_node_tree::<f64>();
     let problem =
-        prepare_problem(std::slice::from_ref(&input), &TreeAciOptions::default()).unwrap();
+        prepare_problem::<f64, _>(std::slice::from_ref(&input), &TreeAciOptions::default())
+            .unwrap();
     let (arena, _) = SampleArena::from_global_seeds(&problem, &[vec![0, 0]]).unwrap();
     let frames =
         InputFrameStore::<f64>::from_samples(std::slice::from_ref(&input), &problem, &arena)
@@ -546,7 +557,7 @@ fn candidate_frame_stays_correct_when_the_shared_budget_has_no_headroom_for_cach
     // Exactly the persistent frame cache's own cost (see
     // `the_frame_cache_is_bounded_in_aggregate`: 64 bytes for this fixture),
     // leaving zero headroom for the candidate cache.
-    let tight = prepare_problem(
+    let tight = prepare_problem::<f64, _>(
         std::slice::from_ref(&input),
         &TreeAciOptions {
             max_frame_bytes: 64,
@@ -589,7 +600,7 @@ fn extend_reclaims_candidate_cache_when_base_frames_consume_its_budget() {
         std::mem::size_of::<super::CandidateCacheKey>() + 2 * std::mem::size_of::<f64>();
     let initial_frame_bytes = 32;
     let frame_budget = initial_frame_bytes + candidate_entry_bytes;
-    let problem = prepare_problem(
+    let problem = prepare_problem::<f64, _>(
         std::slice::from_ref(&input),
         &TreeAciOptions {
             max_frame_bytes: frame_budget,
@@ -646,7 +657,8 @@ fn the_frame_cache_is_bounded_in_aggregate() {
     let seeds = [vec![0, 0], vec![1, 1]];
 
     let generous =
-        prepare_problem(std::slice::from_ref(&input), &TreeAciOptions::default()).unwrap();
+        prepare_problem::<f64, _>(std::slice::from_ref(&input), &TreeAciOptions::default())
+            .unwrap();
     let (arena, _) = SampleArena::from_global_seeds(&generous, &seeds).unwrap();
     let frames =
         InputFrameStore::<f64>::from_samples(std::slice::from_ref(&input), &generous, &arena)
@@ -657,7 +669,7 @@ fn the_frame_cache_is_bounded_in_aggregate() {
     assert_eq!(frames.records(), 2);
     assert_eq!(frames.retained_bytes(), 64);
 
-    let tight = prepare_problem(
+    let tight = prepare_problem::<f64, _>(
         std::slice::from_ref(&input),
         &TreeAciOptions {
             max_frame_bytes: 63,
@@ -683,10 +695,10 @@ fn the_frame_cache_is_bounded_in_aggregate() {
     // The two bounds are independent: a per-frame ceiling sized exactly to one
     // frame still admits every frame, which is why it cannot stand in for the
     // aggregate.
-    let per_frame_only = prepare_problem(
+    let per_frame_only = prepare_problem::<f64, _>(
         std::slice::from_ref(&input),
         &TreeAciOptions {
-            max_frame_elements: 4,
+            max_frame_elements: Some(4),
             ..TreeAciOptions::default()
         },
     )
@@ -952,7 +964,7 @@ fn star_tree_for_fallback_dispatch() -> TreeTN<IdxTensor, usize> {
 fn two_incoming_core_matrix_batched_matches_scalar_contraction_on_every_pair() {
     let inputs = vec![star_tree_for_fallback_dispatch()];
     let options = TreeAciOptions::default();
-    let problem = prepare_problem(&inputs, &options).unwrap();
+    let problem = prepare_problem::<f64, _>(&inputs, &options).unwrap();
     let cores = super::prepare_cores::<f64, usize>(&inputs[0], &problem).unwrap();
 
     let edge = problem
@@ -1166,7 +1178,7 @@ fn packed_candidate_frame_batch_preserves_column_major_order() {
 fn candidate_batches_reuse_one_oriented_core_for_distinct_candidates() {
     let input = chain_tree_for_batched_compute();
     let inputs = vec![input];
-    let problem = prepare_problem(&inputs, &TreeAciOptions::default()).unwrap();
+    let problem = prepare_problem::<f64, _>(&inputs, &TreeAciOptions::default()).unwrap();
     let edge = problem
         .directed_edges
         .iter()
@@ -1194,6 +1206,7 @@ fn candidate_batches_reuse_one_oriented_core_for_distinct_candidates() {
                     local_coordinate,
                     incoming: vec![(incoming_edge, incoming_sample)],
                 }],
+                0,
             )
             .unwrap();
     }
@@ -1207,7 +1220,7 @@ fn candidate_batches_reuse_one_oriented_core_for_distinct_candidates() {
 fn complex_branch_candidate_batch_preserves_order_and_matches_scalar_frames() {
     let input = y_tree::<Complex64>();
     let inputs = vec![input];
-    let problem = prepare_problem(&inputs, &TreeAciOptions::default()).unwrap();
+    let problem = prepare_problem::<f64, _>(&inputs, &TreeAciOptions::default()).unwrap();
     let edge = problem
         .directed_edges
         .iter()
@@ -1233,7 +1246,7 @@ fn complex_branch_candidate_batch_preserves_order_and_matches_scalar_frames() {
         .collect::<Vec<_>>();
 
     let packed = frames
-        .candidate_frames_for_edge(&inputs, &problem, 0, edge, &candidates)
+        .candidate_frames_for_edge(&inputs, &problem, 0, edge, &candidates, 0)
         .unwrap();
     let scalar = candidates
         .iter()
@@ -1254,7 +1267,7 @@ fn complex_branch_candidate_batch_preserves_order_and_matches_scalar_frames() {
 fn candidate_frames_for_edge_falls_back_on_a_leaf_edge_with_zero_incoming_edges() {
     let inputs = vec![star_tree_for_fallback_dispatch()];
     let options = TreeAciOptions::default();
-    let problem = prepare_problem(&inputs, &options).unwrap();
+    let problem = prepare_problem::<f64, _>(&inputs, &options).unwrap();
 
     let edge = problem
         .directed_edges
@@ -1281,7 +1294,7 @@ fn candidate_frames_for_edge_falls_back_on_a_leaf_edge_with_zero_incoming_edges(
     ];
 
     let dispatched = frames
-        .candidate_frames_for_edge(&inputs, &problem, 0, edge, &candidates)
+        .candidate_frames_for_edge(&inputs, &problem, 0, edge, &candidates, 0)
         .unwrap();
     let scalar = candidates
         .iter()
@@ -1302,7 +1315,7 @@ fn candidate_frames_for_edge_falls_back_on_a_leaf_edge_with_zero_incoming_edges(
 fn candidate_frames_for_edge_batches_a_branch_edge_with_two_incoming_edges() {
     let inputs = vec![star_tree_for_fallback_dispatch()];
     let options = TreeAciOptions::default();
-    let problem = prepare_problem(&inputs, &options).unwrap();
+    let problem = prepare_problem::<f64, _>(&inputs, &options).unwrap();
 
     let edge = problem
         .directed_edges
@@ -1341,7 +1354,7 @@ fn candidate_frames_for_edge_batches_a_branch_edge_with_two_incoming_edges() {
     assert_eq!(candidates.len(), 8);
 
     let dispatched = frames
-        .candidate_frames_for_edge(&inputs, &problem, 0, edge, &candidates)
+        .candidate_frames_for_edge(&inputs, &problem, 0, edge, &candidates, 0)
         .unwrap();
     let scalar = candidates
         .iter()
@@ -1365,7 +1378,7 @@ fn candidate_frames_for_edge_records_frame_diagnostics_with_hub_coordination_num
 
     let inputs = vec![star_tree_for_fallback_dispatch()];
     let options = TreeAciOptions::default();
-    let problem = prepare_problem(&inputs, &options).unwrap();
+    let problem = prepare_problem::<f64, _>(&inputs, &options).unwrap();
 
     let edge = problem
         .directed_edges
@@ -1398,7 +1411,7 @@ fn candidate_frames_for_edge_records_frame_diagnostics_with_hub_coordination_num
 
     branch_diagnostics::reset();
     let _dispatched = frames
-        .candidate_frames_for_edge(&inputs, &problem, 0, edge, &candidates)
+        .candidate_frames_for_edge(&inputs, &problem, 0, edge, &candidates, 0)
         .unwrap();
 
     let snapshot = branch_diagnostics::snapshot();
@@ -1423,7 +1436,7 @@ fn frame_diagnostics_keys_are_namespaced_per_input_operand() {
     let tree = star_tree_for_fallback_dispatch();
     let inputs = vec![tree.clone(), tree];
     let options = TreeAciOptions::default();
-    let problem = prepare_problem(&inputs, &options).unwrap();
+    let problem = prepare_problem::<f64, _>(&inputs, &options).unwrap();
 
     let edge = problem
         .directed_edges
@@ -1472,7 +1485,7 @@ fn frame_diagnostics_keys_are_namespaced_per_input_operand() {
 #[test]
 fn two_incoming_candidate_batch_obeys_the_working_byte_limit() {
     let inputs = vec![star_tree_for_fallback_dispatch()];
-    let mut problem = prepare_problem(&inputs, &TreeAciOptions::default()).unwrap();
+    let mut problem = prepare_problem::<f64, _>(&inputs, &TreeAciOptions::default()).unwrap();
     let edge = problem
         .directed_edges
         .iter()
@@ -1495,14 +1508,14 @@ fn two_incoming_candidate_batch_obeys_the_working_byte_limit() {
         }
     }
     let scratch_bytes = frames
-        .enumerated_candidate_frame_scratch_elements(&problem, 0, edge, &candidate_sets)
+        .enumerated_candidate_frame_scratch_elements(&problem, 0, edge, &candidate_sets, 0)
         .unwrap()
         * std::mem::size_of::<f64>();
     assert!(scratch_bytes > 0);
     problem.max_working_bytes = scratch_bytes - 1;
 
     let error = frames
-        .candidate_frames_for_edge(&inputs, &problem, 0, edge, &candidates)
+        .candidate_frames_for_edge(&inputs, &problem, 0, edge, &candidates, 0)
         .unwrap_err();
 
     assert!(matches!(
@@ -1555,7 +1568,7 @@ fn four_arm_star_tree_for_three_incoming_fallback() -> TreeTN<IdxTensor, usize> 
 fn candidate_frames_for_edge_batches_three_incoming_edges() {
     let inputs = vec![four_arm_star_tree_for_three_incoming_fallback()];
     let options = TreeAciOptions::default();
-    let problem = prepare_problem(&inputs, &options).unwrap();
+    let problem = prepare_problem::<f64, _>(&inputs, &options).unwrap();
 
     let edge = problem
         .directed_edges
@@ -1588,7 +1601,7 @@ fn candidate_frames_for_edge_batches_three_incoming_edges() {
 
     super::multi_incoming_debug_stats::reset();
     let dispatched = frames
-        .candidate_frames_for_edge(&inputs, &problem, 0, edge, &candidates)
+        .candidate_frames_for_edge(&inputs, &problem, 0, edge, &candidates, 0)
         .unwrap();
     // The complete cross now takes the generalized batched route; the scalar
     // `candidate_frame` path below stays the differential oracle.
@@ -1668,7 +1681,7 @@ fn chain_tree_for_batched_compute() -> TreeTN<IdxTensor, usize> {
 fn batched_duplicate_candidates_are_counted_once_in_the_cache_budget() {
     let input = chain_tree_for_batched_compute();
     let inputs = vec![input];
-    let problem = prepare_problem(&inputs, &TreeAciOptions::default()).unwrap();
+    let problem = prepare_problem::<f64, _>(&inputs, &TreeAciOptions::default()).unwrap();
     let edge = problem
         .directed_edges
         .iter()
@@ -1685,7 +1698,14 @@ fn batched_duplicate_candidates_are_counted_once_in_the_cache_budget() {
     let retained_before = frames.retained_bytes();
 
     let result = frames
-        .candidate_frames_for_edge(&inputs, &problem, 0, edge, &[candidate.clone(), candidate])
+        .candidate_frames_for_edge(
+            &inputs,
+            &problem,
+            0,
+            edge,
+            &[candidate.clone(), candidate],
+            0,
+        )
         .unwrap();
 
     assert_eq!(result[0], result[1]);
@@ -1705,7 +1725,8 @@ fn batched_duplicate_candidates_are_counted_once_in_the_cache_budget() {
 fn compute_batch_matches_scalar_compute_on_a_chain_edge() {
     let input = chain_tree_for_batched_compute();
     let problem =
-        prepare_problem(std::slice::from_ref(&input), &TreeAciOptions::default()).unwrap();
+        prepare_problem::<f64, _>(std::slice::from_ref(&input), &TreeAciOptions::default())
+            .unwrap();
 
     let edge = problem
         .directed_edges
@@ -1767,7 +1788,8 @@ fn compute_batch_matches_scalar_compute_on_a_chain_edge() {
 fn extend_matches_a_full_rebuild_on_a_chain_with_a_batched_edge() {
     let input = chain_tree_for_batched_compute();
     let problem =
-        prepare_problem(std::slice::from_ref(&input), &TreeAciOptions::default()).unwrap();
+        prepare_problem::<f64, _>(std::slice::from_ref(&input), &TreeAciOptions::default())
+            .unwrap();
 
     let edge = problem
         .directed_edges
@@ -1890,7 +1912,8 @@ fn chain5_tree_for_dedup_regression() -> TreeTN<IdxTensor, usize> {
 fn from_samples_issues_exactly_one_compute_call_per_memo_slot_on_a_five_node_chain() {
     let input = chain5_tree_for_dedup_regression();
     let problem =
-        prepare_problem(std::slice::from_ref(&input), &TreeAciOptions::default()).unwrap();
+        prepare_problem::<f64, _>(std::slice::from_ref(&input), &TreeAciOptions::default())
+            .unwrap();
 
     // Four distinct global seeds, varying node 0/1/2's physical values, so
     // every directed edge accumulates multiple distinct samples rather than
@@ -1930,7 +1953,8 @@ fn from_samples_issues_exactly_one_compute_call_per_memo_slot_on_a_five_node_cha
 fn priming_reuses_memoized_incoming_without_copying_again() {
     let input = chain_tree_for_batched_compute();
     let problem =
-        prepare_problem(std::slice::from_ref(&input), &TreeAciOptions::default()).unwrap();
+        prepare_problem::<f64, _>(std::slice::from_ref(&input), &TreeAciOptions::default())
+            .unwrap();
     let (arena, _) = SampleArena::from_global_seeds(&problem, &[vec![0, 0, 0]]).unwrap();
     let edge = problem
         .directed_edges
@@ -1958,7 +1982,8 @@ fn priming_reuses_memoized_incoming_without_copying_again() {
 fn from_samples_uses_scalar_only_for_non_batch_edges_on_a_chain() {
     let input = chain5_tree_for_dedup_regression();
     let problem =
-        prepare_problem(std::slice::from_ref(&input), &TreeAciOptions::default()).unwrap();
+        prepare_problem::<f64, _>(std::slice::from_ref(&input), &TreeAciOptions::default())
+            .unwrap();
     let seeds = vec![
         vec![0, 0, 0, 0, 0],
         vec![1, 0, 0, 0, 0],
@@ -1993,7 +2018,8 @@ fn from_samples_uses_scalar_only_for_non_batch_edges_on_a_chain() {
 fn dependency_order_places_incoming_frames_before_dependents_on_a_star() {
     let input = star_tree_for_fallback_dispatch();
     let problem =
-        prepare_problem(std::slice::from_ref(&input), &TreeAciOptions::default()).unwrap();
+        prepare_problem::<f64, _>(std::slice::from_ref(&input), &TreeAciOptions::default())
+            .unwrap();
     let order = crate::problem::dependency_order(&problem.directed_edges).unwrap();
     assert_eq!(order.len(), problem.directed_edges.len());
 
@@ -2022,7 +2048,8 @@ fn dependency_order_places_incoming_frames_before_dependents_on_a_star() {
 fn compute_batch_falls_back_correctly_on_a_leaf_edge() {
     let input = star_tree_for_fallback_dispatch();
     let problem =
-        prepare_problem(std::slice::from_ref(&input), &TreeAciOptions::default()).unwrap();
+        prepare_problem::<f64, _>(std::slice::from_ref(&input), &TreeAciOptions::default())
+            .unwrap();
 
     let edge = problem
         .directed_edges
@@ -2076,7 +2103,8 @@ fn compute_batch_falls_back_correctly_on_a_leaf_edge() {
 fn compute_batch_batches_a_branch_edge_with_two_incoming_edges() {
     let input = star_tree_for_fallback_dispatch();
     let problem =
-        prepare_problem(std::slice::from_ref(&input), &TreeAciOptions::default()).unwrap();
+        prepare_problem::<f64, _>(std::slice::from_ref(&input), &TreeAciOptions::default())
+            .unwrap();
 
     let edge = problem
         .directed_edges
@@ -2120,7 +2148,8 @@ fn compute_batch_batches_a_branch_edge_with_two_incoming_edges() {
 fn compute_batch_keeps_the_scalar_route_on_three_incoming_edges() {
     let input = four_arm_star_tree_for_three_incoming_fallback();
     let problem =
-        prepare_problem(std::slice::from_ref(&input), &TreeAciOptions::default()).unwrap();
+        prepare_problem::<f64, _>(std::slice::from_ref(&input), &TreeAciOptions::default())
+            .unwrap();
 
     let edge = problem
         .directed_edges
@@ -2175,7 +2204,8 @@ fn compute_batch_keeps_the_scalar_route_on_three_incoming_edges() {
 fn compute_pulls_already_known_samples_from_the_previous_store_without_recomputing() {
     let input = chain_tree_for_batched_compute();
     let problem =
-        prepare_problem(std::slice::from_ref(&input), &TreeAciOptions::default()).unwrap();
+        prepare_problem::<f64, _>(std::slice::from_ref(&input), &TreeAciOptions::default())
+            .unwrap();
 
     let edge = problem
         .directed_edges
@@ -2299,7 +2329,8 @@ fn compute_pulls_already_known_samples_from_the_previous_store_without_recomputi
 fn extend_reuses_unchanged_edges_via_rc_instead_of_rebuilding_them() {
     let input = chain5_tree_for_dedup_regression();
     let problem =
-        prepare_problem(std::slice::from_ref(&input), &TreeAciOptions::default()).unwrap();
+        prepare_problem::<f64, _>(std::slice::from_ref(&input), &TreeAciOptions::default())
+            .unwrap();
     let edge_count = problem.directed_edges.len();
 
     let (mut arena, _candidates) =
@@ -2431,7 +2462,7 @@ fn branch_point_batched_speedup_vs_scalar_at_realistic_scale() {
 
     let inputs = vec![star];
     let options = TreeAciOptions::default();
-    let problem = prepare_problem(&inputs, &options).unwrap();
+    let problem = prepare_problem::<f64, _>(&inputs, &options).unwrap();
     let edge = problem
         .directed_edges
         .iter()
@@ -2464,7 +2495,7 @@ fn branch_point_batched_speedup_vs_scalar_at_realistic_scale() {
     let batched_frames = InputFrameStore::<f64>::from_samples(&inputs, &problem, &arena).unwrap();
     let batched_start = Instant::now();
     let batched = batched_frames
-        .candidate_frames_for_edge(&inputs, &problem, 0, edge, &candidates)
+        .candidate_frames_for_edge(&inputs, &problem, 0, edge, &candidates, 0)
         .unwrap();
     let batched_elapsed = batched_start.elapsed();
 
@@ -2946,7 +2977,7 @@ fn assert_multi_incoming_matches_scalar<T: FixtureScalar>(
     degree: usize,
 ) {
     let inputs = vec![input];
-    let problem = prepare_problem(&inputs, &TreeAciOptions::default()).unwrap();
+    let problem = prepare_problem::<f64, _>(&inputs, &TreeAciOptions::default()).unwrap();
     let edge = hub_edge(&problem, degree);
     let (arena, candidate_sets) = SampleArena::from_global_seeds(&problem, seeds).unwrap();
     let frames = InputFrameStore::<T>::from_samples(&inputs, &problem, &arena).unwrap();
@@ -2958,7 +2989,7 @@ fn assert_multi_incoming_matches_scalar<T: FixtureScalar>(
 
     super::multi_incoming_debug_stats::reset();
     let packed = frames
-        .candidate_frames_for_edge(&inputs, &problem, 0, edge, &candidates)
+        .candidate_frames_for_edge(&inputs, &problem, 0, edge, &candidates, 0)
         .unwrap();
     let batched_groups = super::multi_incoming_debug_stats::batched_groups();
 
@@ -3035,7 +3066,7 @@ fn four_incoming_candidate_batches_match_the_scalar_oracle() {
 #[test]
 fn multi_incoming_batch_preserves_order_for_duplicate_and_reordered_candidates() {
     let inputs = vec![three_incoming_star::<f64>()];
-    let problem = prepare_problem(&inputs, &TreeAciOptions::default()).unwrap();
+    let problem = prepare_problem::<f64, _>(&inputs, &TreeAciOptions::default()).unwrap();
     let edge = hub_edge(&problem, 3);
     let seeds = vec![
         vec![0, 0, 0, 0, 0],
@@ -3056,7 +3087,7 @@ fn multi_incoming_batch_preserves_order_for_duplicate_and_reordered_candidates()
 
     super::multi_incoming_debug_stats::reset();
     let packed = frames
-        .candidate_frames_for_edge(&inputs, &problem, 0, edge, &candidates)
+        .candidate_frames_for_edge(&inputs, &problem, 0, edge, &candidates, 0)
         .unwrap();
     assert!(super::multi_incoming_debug_stats::batched_groups() > 0);
 
@@ -3082,7 +3113,7 @@ fn multi_incoming_batch_preserves_order_for_duplicate_and_reordered_candidates()
 #[test]
 fn multi_incoming_batch_falls_back_to_scalar_for_a_sparse_candidate_set() {
     let inputs = vec![three_incoming_star::<f64>()];
-    let problem = prepare_problem(&inputs, &TreeAciOptions::default()).unwrap();
+    let problem = prepare_problem::<f64, _>(&inputs, &TreeAciOptions::default()).unwrap();
     let edge = hub_edge(&problem, 3);
     let seeds = vec![
         vec![0, 0, 0, 0, 0],
@@ -3119,7 +3150,7 @@ fn multi_incoming_batch_falls_back_to_scalar_for_a_sparse_candidate_set() {
 
     super::multi_incoming_debug_stats::reset();
     let packed = frames
-        .candidate_frames_for_edge(&inputs, &problem, 0, edge, &candidates)
+        .candidate_frames_for_edge(&inputs, &problem, 0, edge, &candidates, 0)
         .unwrap();
     assert_eq!(super::multi_incoming_debug_stats::batched_groups(), 0);
     assert_eq!(super::multi_incoming_debug_stats::scalar_groups(), 1);
@@ -3139,7 +3170,7 @@ fn multi_incoming_batch_falls_back_to_scalar_for_a_sparse_candidate_set() {
 #[test]
 fn multi_incoming_batch_falls_back_to_scalar_when_the_working_budget_is_tight() {
     let inputs = vec![three_incoming_star::<f64>()];
-    let mut problem = prepare_problem(&inputs, &TreeAciOptions::default()).unwrap();
+    let mut problem = prepare_problem::<f64, _>(&inputs, &TreeAciOptions::default()).unwrap();
     let edge = hub_edge(&problem, 3);
     let seeds = vec![
         vec![0, 0, 0, 0, 0],
@@ -3151,7 +3182,7 @@ fn multi_incoming_batch_falls_back_to_scalar_when_the_working_budget_is_tight() 
     let candidates = full_cross_candidates(&problem, &candidate_sets, edge);
 
     let batched_bytes = frames
-        .enumerated_candidate_frame_scratch_elements(&problem, 0, edge, &candidate_sets)
+        .enumerated_candidate_frame_scratch_elements(&problem, 0, edge, &candidate_sets, 0)
         .unwrap()
         * std::mem::size_of::<f64>();
     assert!(batched_bytes > 0);
@@ -3162,7 +3193,7 @@ fn multi_incoming_batch_falls_back_to_scalar_when_the_working_budget_is_tight() 
     // over budget or raising a limit error.
     super::multi_incoming_debug_stats::reset();
     let packed = frames
-        .candidate_frames_for_edge(&inputs, &problem, 0, edge, &candidates)
+        .candidate_frames_for_edge(&inputs, &problem, 0, edge, &candidates, 0)
         .unwrap();
     assert_eq!(super::multi_incoming_debug_stats::batched_groups(), 0);
     assert!(super::multi_incoming_debug_stats::scalar_groups() > 0);
@@ -3181,15 +3212,205 @@ fn multi_incoming_batch_falls_back_to_scalar_when_the_working_budget_is_tight() 
     // The over-budget estimate must also shrink back to the scalar charge, so
     // the local update's pre-flight and the kernel agree on the same route.
     let fallback_elements = frames
-        .enumerated_candidate_frame_scratch_elements(&problem, 0, edge, &candidate_sets)
+        .enumerated_candidate_frame_scratch_elements(&problem, 0, edge, &candidate_sets, 0)
         .unwrap();
     assert!(fallback_elements * std::mem::size_of::<f64>() <= problem.max_working_bytes);
+}
+
+/// Issue #726: the batched route is affordable only relative to what the
+/// caller is already holding, so the same edge, the same candidates, and the
+/// same budget route differently once a reservation is declared -- and the
+/// estimate moves with the kernel, not against it.
+#[test]
+fn multi_incoming_routing_follows_the_caller_reservation() {
+    let inputs = vec![three_incoming_star::<f64>()];
+    let problem = prepare_problem::<f64, _>(&inputs, &TreeAciOptions::default()).unwrap();
+    let edge = hub_edge(&problem, 3);
+    let seeds = vec![
+        vec![0, 0, 0, 0, 0],
+        vec![3, 1, 2, 1, 1],
+        vec![1, 0, 1, 0, 1],
+    ];
+    let (arena, candidate_sets) = SampleArena::from_global_seeds(&problem, &seeds).unwrap();
+    let frames = InputFrameStore::<f64>::from_samples(&inputs, &problem, &arena).unwrap();
+    let candidates = full_cross_candidates(&problem, &candidate_sets, edge);
+
+    let batched_elements = frames
+        .enumerated_candidate_frame_scratch_elements(&problem, 0, edge, &candidate_sets, 0)
+        .unwrap();
+    let batched_bytes = batched_elements * std::mem::size_of::<f64>();
+
+    // Nothing reserved: the whole budget is available and the cross is taken.
+    super::multi_incoming_debug_stats::reset();
+    let unreserved = frames
+        .candidate_frames_for_edge(&inputs, &problem, 0, edge, &candidates, 0)
+        .unwrap();
+    assert!(super::multi_incoming_debug_stats::batched_groups() > 0);
+    assert_eq!(super::multi_incoming_debug_stats::scalar_groups(), 0);
+
+    // Reserve everything but one byte less than the cross needs. The kernel
+    // degrades instead of overrunning the budget, and the estimate reports the
+    // route the kernel will take rather than the one it cannot afford.
+    let reservation = problem.max_working_bytes - batched_bytes + 1;
+    super::multi_incoming_debug_stats::reset();
+    let reserved = frames
+        .candidate_frames_for_edge(&inputs, &problem, 0, edge, &candidates, reservation)
+        .unwrap();
+    assert_eq!(super::multi_incoming_debug_stats::batched_groups(), 0);
+    assert!(super::multi_incoming_debug_stats::scalar_groups() > 0);
+
+    let scalar_elements = frames
+        .enumerated_candidate_frame_scratch_elements(
+            &problem,
+            0,
+            edge,
+            &candidate_sets,
+            reservation,
+        )
+        .unwrap();
+    assert!(
+        scalar_elements < batched_elements,
+        "the degraded charge must be the cheaper one: {scalar_elements} vs {batched_elements}"
+    );
+    assert!(
+        scalar_elements * std::mem::size_of::<f64>() + reservation <= problem.max_working_bytes,
+        "the reported charge must fit the budget that remains"
+    );
+    // Routing is a memory decision, never a numerical one: the two routes
+    // differ only in the order their identical contractions are reduced.
+    assert_eq!(unreserved.candidate_count(), reserved.candidate_count());
+    assert_eq!(unreserved.bond_dim(), reserved.bond_dim());
+    let scale = unreserved
+        .as_col_major_slice()
+        .iter()
+        .fold(0.0f64, |scale, value| scale.max(value.abs()));
+    let residual = unreserved
+        .as_col_major_slice()
+        .iter()
+        .zip(reserved.as_col_major_slice())
+        .fold(0.0f64, |residual, (left, right)| {
+            residual.max((left - right).abs())
+        });
+    assert!(
+        residual <= 1.0e-12 * scale,
+        "the degraded route changed the values: {residual:.3e} against scale {scale:.3e}"
+    );
+}
+
+/// The local update's aggregate pre-flight and the kernel it charges for now
+/// agree on the same route, so a budget that admits the batched cross alone
+/// but not together with the update's own live buffers runs on the scalar
+/// route instead of being refused (#726).
+#[test]
+fn local_update_degrades_instead_of_refusing_an_aggregate_overrun() {
+    let inputs = vec![three_incoming_star::<f64>()];
+    let mut problem = prepare_problem::<f64, _>(&inputs, &TreeAciOptions::default()).unwrap();
+    let edge = hub_edge(&problem, 3);
+    let seeds = vec![
+        vec![0, 0, 0, 0, 0],
+        vec![3, 1, 2, 1, 1],
+        vec![1, 0, 1, 0, 1],
+    ];
+    let (arena, candidate_sets) = SampleArena::from_global_seeds(&problem, &seeds).unwrap();
+    let frames = InputFrameStore::<f64>::from_samples(&inputs, &problem, &arena).unwrap();
+    let options = TreeAciOptions::default();
+    let mut square = |batch: crate::TreeElementwiseBatch<'_, f64>, output: &mut [f64]| {
+        for (point, value) in output.iter_mut().enumerate() {
+            let value_at_point = batch.get(0, point)?;
+            *value = value_at_point * value_at_point;
+        }
+        Ok(())
+    };
+
+    let generous = crate::local_update::materialize_and_factor_edge(
+        &inputs,
+        &problem,
+        &candidate_sets,
+        &frames,
+        edge,
+        &options,
+        true,
+        &mut square,
+    )
+    .expect("the default budget admits this edge");
+
+    // The exact window: the batched cross fits `max_working_bytes` on its own,
+    // and does not fit once the update's own buffers are counted. Before #726
+    // this configuration was refused with a typed limit error even though the
+    // scalar route was affordable.
+    let reserved_bytes = crate::local_update::reserved_working_bytes::<f64>(
+        inputs.len() * generous.row_count * generous.col_count,
+        generous.row_count * generous.col_count,
+        generous.row_count,
+        generous.col_count,
+        (0..inputs.len())
+            .map(|input| frames.bond_dim(input, edge).unwrap())
+            .max()
+            .unwrap(),
+    )
+    .unwrap();
+    let batched_bytes = (0..inputs.len())
+        .map(|input| {
+            frames
+                .enumerated_candidate_frame_scratch_elements(
+                    &problem,
+                    input,
+                    edge,
+                    &candidate_sets,
+                    0,
+                )
+                .unwrap()
+        })
+        .max()
+        .unwrap()
+        * std::mem::size_of::<f64>();
+    assert!(reserved_bytes > 0);
+    problem.max_working_bytes = reserved_bytes + batched_bytes - 1;
+    assert!(
+        batched_bytes <= problem.max_working_bytes,
+        "the batched cross must still fit the budget on its own"
+    );
+
+    super::multi_incoming_debug_stats::reset();
+    let degraded = crate::local_update::materialize_and_factor_edge(
+        &inputs,
+        &problem,
+        &candidate_sets,
+        &frames,
+        edge,
+        &options,
+        true,
+        &mut square,
+    )
+    .expect("an affordable scalar route must not be refused");
+    assert_eq!(super::multi_incoming_debug_stats::batched_groups(), 0);
+    assert!(super::multi_incoming_debug_stats::scalar_groups() > 0);
+    assert_eq!(degraded.row_count, generous.row_count);
+    assert_eq!(degraded.col_count, generous.col_count);
+    assert_eq!(degraded.pivot_errors.len(), generous.pivot_errors.len());
+    // The two routes contract the same numbers in a different order, so they
+    // agree to rounding rather than bit for bit.
+    let scale = generous
+        .local_values
+        .iter()
+        .fold(0.0f64, |scale, value| scale.max(value.abs()));
+    let residual = degraded
+        .local_values
+        .iter()
+        .zip(&generous.local_values)
+        .fold(0.0f64, |residual, (left, right)| {
+            residual.max((left - right).abs())
+        });
+    assert!(
+        residual <= 1.0e-12 * scale,
+        "the degraded route changed the local matrix: {residual:.3e} against scale {scale:.3e}"
+    );
 }
 
 #[test]
 fn multi_incoming_batch_is_deterministic_and_never_caches_candidates() {
     let inputs = vec![three_incoming_star::<f64>()];
-    let problem = prepare_problem(&inputs, &TreeAciOptions::default()).unwrap();
+    let problem = prepare_problem::<f64, _>(&inputs, &TreeAciOptions::default()).unwrap();
     let edge = hub_edge(&problem, 3);
     let seeds = vec![
         vec![0, 0, 0, 0, 0],
@@ -3204,7 +3425,7 @@ fn multi_incoming_batch_is_deterministic_and_never_caches_candidates() {
     for _ in 0..3 {
         super::candidate_debug_stats::reset();
         let packed = frames
-            .candidate_frames_for_edge(&inputs, &problem, 0, edge, &candidates)
+            .candidate_frames_for_edge(&inputs, &problem, 0, edge, &candidates, 0)
             .unwrap();
         // Three-or-more-incoming candidates are deliberately not cached: the
         // repeat runs must keep missing, exactly as the scalar route did.
@@ -3506,7 +3727,7 @@ fn measure_three_incoming_case(m: usize, d: usize) {
     let inputs =
         vec![TreeTN::from_tensors(vec![hub, arm1, arm2, arm3, arm4], vec![0, 1, 2, 3, 4]).unwrap()];
 
-    let problem = prepare_problem(&inputs, &TreeAciOptions::default()).unwrap();
+    let problem = prepare_problem::<f64, _>(&inputs, &TreeAciOptions::default()).unwrap();
     let edge = hub_edge(&problem, 3);
     let seeds: Vec<Vec<usize>> = (0..m)
         .map(|index| vec![0, 0, index, index, index])
@@ -3539,7 +3760,7 @@ fn measure_three_incoming_case(m: usize, d: usize) {
         super::multi_incoming_debug_stats::reset();
         let started = Instant::now();
         let batched = batched_frames
-            .candidate_frames_for_edge(&inputs, &problem, 0, edge, &candidates)
+            .candidate_frames_for_edge(&inputs, &problem, 0, edge, &candidates, 0)
             .unwrap();
         batched_times.push(started.elapsed());
         assert!(super::multi_incoming_debug_stats::batched_groups() > 0);
@@ -3666,7 +3887,7 @@ fn measure_candidate_product_accounting(
     }
     let inputs = vec![TreeTN::from_tensors(tensors, (0..5).collect()).unwrap()];
 
-    let problem = prepare_problem(&inputs, &TreeAciOptions::default()).unwrap();
+    let problem = prepare_problem::<f64, _>(&inputs, &TreeAciOptions::default()).unwrap();
     let edge = hub_edge(&problem, 3);
     let seeds: Vec<Vec<usize>> = (0..m)
         .map(|index| vec![0, 0, index, index, index])
@@ -3694,7 +3915,7 @@ fn measure_candidate_product_accounting(
     super::debug_stats::reset();
     super::multi_incoming_debug_stats::reset();
     let batched = batched_frames
-        .candidate_frames_for_edge(&inputs, &problem, 0, edge, &candidates)
+        .candidate_frames_for_edge(&inputs, &problem, 0, edge, &candidates, 0)
         .unwrap();
     let batched_core_reads = super::debug_stats::core_element_reads();
     assert_eq!(

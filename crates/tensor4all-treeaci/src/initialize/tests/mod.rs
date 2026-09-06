@@ -62,8 +62,9 @@ fn bootstrap_samples_reaches_the_requested_rank_on_every_edge() {
         (vec![(0, 1), (0, 2), (0, 3)], 4),
     ] {
         let tree = make_tree(&edges, node_count);
-        let problem = prepare_problem(std::slice::from_ref(&tree), &TreeAciOptions::default())
-            .expect("prepared problem");
+        let problem =
+            prepare_problem::<f64, _>(std::slice::from_ref(&tree), &TreeAciOptions::default())
+                .expect("prepared problem");
         let algebraic = algebraic_edge_bounds(&problem).expect("algebraic bounds");
         // Ask for less than the algebraic maximum everywhere it is more than
         // 1, so the loop must actually enumerate multiple points per edge
@@ -110,8 +111,9 @@ fn long_chain_algebraic_bounds_saturate_without_rejecting_small_active_ranks() {
         .map(|node| (node, node + 1))
         .collect::<Vec<_>>();
     let tree = make_tree(&edges, node_count);
-    let problem = prepare_problem(std::slice::from_ref(&tree), &TreeAciOptions::default())
-        .expect("long rank-two chain must prepare");
+    let problem =
+        prepare_problem::<f64, _>(std::slice::from_ref(&tree), &TreeAciOptions::default())
+            .expect("long rank-two chain must prepare");
 
     let bounds = algebraic_edge_bounds(&problem)
         .expect("an unrepresentably large physical space is still a valid rank ceiling");
@@ -128,8 +130,9 @@ fn long_chain_algebraic_bounds_saturate_without_rejecting_small_active_ranks() {
 fn middle_cut_bootstrap_points() -> Vec<Vec<usize>> {
     let edges = [(0, 1), (1, 2), (2, 3)];
     let tree = make_tree_with_dims(&edges, &[2, 3, 2, 3]);
-    let problem = prepare_problem(std::slice::from_ref(&tree), &TreeAciOptions::default())
-        .expect("prepared problem");
+    let problem =
+        prepare_problem::<f64, _>(std::slice::from_ref(&tree), &TreeAciOptions::default())
+            .expect("prepared problem");
     let (arena, _, pivots) = bootstrap_samples(&problem, &[1, 4, 1]).expect("bootstrap samples");
 
     let mut points = Vec::new();
