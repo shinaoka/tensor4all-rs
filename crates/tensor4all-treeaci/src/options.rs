@@ -19,7 +19,7 @@ const WORKING_BUDGET_OBJECT_SHARE: usize = 4;
 
 /// Controls tree ACI sweeps, global validation, and allocation limits.
 ///
-/// The defaults match train ACI's convergence policy and add conservative
+/// The defaults use per-edge rank stability and conservative
 /// hard allocation ceilings. Increase a ceiling explicitly only after the
 /// topology preflight identifies the resource that needs it.
 ///
@@ -40,7 +40,10 @@ const WORKING_BUDGET_OBJECT_SHARE: usize = 4;
 pub struct TreeAciOptions<V: TreeAciNode> {
     /// Maximum number of complete sweeps. Default: `20`.
     pub max_sweeps: usize,
-    /// Minimum stable sweeps required before convergence. Default: `2`.
+    /// Minimum consecutive passes with no rank growth on any edge, including
+    /// the baseline pass. Default: `2`. A growing cut restarts this window
+    /// even if the network's maximum rank stays constant; rank decreases are
+    /// allowed. The local error and global-guard criteria must also pass.
     pub min_sweeps: usize,
     /// Optional rank cap on every output edge. Default: no explicit cap.
     pub max_bond_dim: Option<usize>,

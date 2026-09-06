@@ -16,7 +16,9 @@ use crate::TreeAciNode;
 #[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
 #[non_exhaustive]
 pub enum TreeAciTermination {
-    /// Error and rank stability criteria were satisfied.
+    /// The local error target, per-edge rank stability, and enabled global
+    /// guard criteria were satisfied. Local residuals and randomized guard
+    /// searches are not a certificate of the full-grid maximum error.
     Converged,
     /// At least one inaccurate edge reached its algebraic or configured rank cap.
     RankLimited,

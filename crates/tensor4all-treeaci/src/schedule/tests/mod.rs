@@ -5,7 +5,8 @@ use tensor4all_treetn::{CanonicalForm, TreeTN};
 
 use super::{
     convergence_criterion, current_state_is_rank_limited, edge_error_metric,
-    global_injection_capacities, run_directional_pass, run_local_sweeps, PassDirection,
+    global_injection_capacities, run_directional_pass, run_local_sweeps, track_rank_stability,
+    PassDirection,
 };
 use crate::global_guard::input_evaluator_debug_stats;
 use crate::transaction::update_edge_transaction;
@@ -162,45 +163,31 @@ fn failed_update_preserves_all_commits_before_the_failing_edge() {
 }
 
 #[test]
-fn convergence_requires_stable_max_rank_and_minimum_dwell() {
-    // Network max is 2 at both sweeps (2 and 2), even though this scenario's
-    // real-world equivalent is an individual edge fluctuating underneath
-    // that max -- exactly the scenario `crates/tensor4all-treeaci/src/schedule.rs`'s
-    // old per-edge-vector check used to reject. `max_ranks` is what
-    // `run_local_sweeps` already computes from `state.edge_ranks.iter().max()`
-    // every pass; this test operates directly on that scalar sequence, the
-    // same shape `tensor4all-aci`'s `convergence_criterion_like_julia` takes.
-    let max_ranks = vec![2usize, 2];
+fn convergence_requires_stable_edge_ranks_and_minimum_dwell() {
     let errors = vec![0.0, 0.0];
     let global = vec![0, 0];
 
     // Below the minimum dwell (only 1 completed sweep): never converges.
     assert!(!convergence_criterion(
         1,
-        &max_ranks[..1],
+        1,
         &errors[..1],
         &global[..1],
         2,
         1.0e-12
     ));
 
-    // Two sweeps, stable max rank, error at tolerance, no global pivots
+    // Two sweeps, stable edge ranks, error at tolerance, no global pivots
     // found in the window: must converge.
-    assert!(convergence_criterion(
-        2, &max_ranks, &errors, &global, 2, 1.0e-12
-    ));
+    assert!(convergence_criterion(2, 2, &errors, &global, 2, 1.0e-12));
 
-    // A max rank that actually increases within the window must still
-    // block convergence (this part of the rule is unchanged).
-    let growing = vec![2usize, 3];
-    assert!(!convergence_criterion(
-        2, &growing, &errors, &global, 2, 1.0e-12
-    ));
+    // Growth on any edge restarts the rank-stability window.
+    assert!(!convergence_criterion(2, 1, &errors, &global, 2, 1.0e-12));
 
     // Error above tolerance still blocks convergence, independent of rank.
     assert!(!convergence_criterion(
         2,
-        &max_ranks,
+        2,
         &[0.0, 1.0e-6],
         &global,
         2,
@@ -209,13 +196,36 @@ fn convergence_requires_stable_max_rank_and_minimum_dwell() {
 
     // A global pivot found within the window still blocks convergence
     // (its error estimate is stale with respect to the injected pivot).
-    assert!(!convergence_criterion(
-        2,
-        &max_ranks,
-        &errors,
-        &[1, 0],
-        2,
-        1.0e-12
+    assert!(!convergence_criterion(2, 2, &errors, &[1, 0], 2, 1.0e-12));
+}
+
+#[test]
+fn smaller_cut_growth_blocks_convergence_even_when_the_maximum_does_not_grow() {
+    for largest in [233, 232] {
+        let mut previous = vec![192, 229, 233, 18];
+        let current = [195, 229, largest, 19];
+        let stable = track_rank_stability(&mut previous, &current, 4);
+        assert_eq!(stable, 1);
+        assert_eq!(previous, current);
+        assert!(!convergence_criterion(
+            2, stable, &[0.0; 2], &[0; 2], 2, 1e-12
+        ));
+    }
+}
+
+#[test]
+fn rank_stability_allows_shrinkage_but_restarts_on_regrowth() {
+    let mut previous = vec![4, 3];
+    let mut stable = track_rank_stability(&mut previous, &[4, 3], 0);
+    assert_eq!(stable, 1);
+    stable = track_rank_stability(&mut previous, &[4, 2], stable);
+    assert_eq!(stable, 2);
+    stable = track_rank_stability(&mut previous, &[4, 3], stable);
+    assert_eq!(stable, 1);
+    stable = track_rank_stability(&mut previous, &[4, 3], stable);
+    assert_eq!(stable, 2);
+    assert!(convergence_criterion(
+        2, stable, &[0.0; 2], &[0; 2], 2, 1e-12
     ));
 }
 
