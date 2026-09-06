@@ -34,6 +34,7 @@ benchmarks/results/*.h5
 !CONTRIBUTING.md
 !AGENTS.md
 !CLAUDE.md
+!PERFORMANCE_TIPS.md
 
 # Private documentation (not committed)
 privatedoc/*

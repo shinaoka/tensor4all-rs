@@ -1,33 +1,30 @@
 # Agent Guidelines for tensor4all-rs
 
-Before acting, read the latest shared tensor4all agent rules from the
-[`tensor4all-agent-rules`](https://github.com/tensor4all/tensor4all-agent-rules)
-repository. Start from:
+Before acting, read the shared tensor4all agent rules, starting from
+`https://github.com/tensor4all/tensor4all-agent-rules/blob/main/rules/index.md`
+(offline fallback: `../tensor4all-agent-rules/rules/index.md`). Load only the
+common, Rust, performance, numerical, docs, or benchmark rule files relevant to
+the task. If neither is available, continue from the rules in this file and
+state so when creating a PR.
 
-- `https://github.com/tensor4all/tensor4all-agent-rules/blob/main/rules/index.md`
-
-If internet access is unavailable or the remote cannot be resolved, use the
-sibling checkout:
-
-- `../tensor4all-agent-rules/rules/index.md`
-
-Load only the common, Rust, performance, numerical, docs, or benchmark rule
-files relevant to the task. If neither online access nor the sibling checkout
-is available, continue from the rules embedded in this file and state the shared
-rules were unavailable when creating a PR.
-
-Then read `README.md` and `REPOSITORY_RULES.md` before starting work.
+Then read `README.md` and `REPOSITORY_RULES.md`. Read `PERFORMANCE_TIPS.md`
+(performance audit catalog) during performance-sensitive implementation (TT
+evaluation, interpolation, caches, contraction hot paths) and when reviewing
+any PR touching those areas; `skills/audit-performance/` launches that audit.
 
 ## Development Stage
 
-**Early development** - no backward compatibility required. Remove deprecated code immediately.
+**Early development**: no backward compatibility. Remove deprecated code
+immediately.
 
 ## General Guidelines
 
-- Use same language as past conversations (Japanese if previous was Japanese)
-- Source code and docs in English
-- Each crate in `crates/` is independent with own `Cargo.toml`, `src/`, `tests/`
-- **Bug fixing**: When a bug is discovered, always check related files for similar bugs and propose to the user to inspect them
+- Reply in the language of the conversation (Japanese if it was Japanese).
+  Source code and docs are English.
+- Each crate in `crates/` is independent with its own `Cargo.toml`, `src/`,
+  `tests/`.
+- **Bug fixing**: when a bug is found, check related files for similar bugs and
+  propose inspecting them to the user.
 
 ### API Reference (Check First)
 
@@ -35,100 +32,96 @@ Then read `README.md` and `REPOSITORY_RULES.md` before starting work.
 cargo run -p xtask --release -- api-dump
 ```
 
-This generates a complete, temporary inventory under `target/api-dump/` and
-verifies that every public crate under `crates/` appears exactly once. The
-output is ignored and must never be committed or edited manually. Read the
-relevant `target/api-dump/*.md` file before source files; only read source when
-that API inventory is insufficient.
+Generates a temporary inventory under `target/api-dump/` (ignored; never commit
+or hand-edit) and verifies every public crate under `crates/` appears exactly
+once. Read the relevant `target/api-dump/*.md` before source; read source only
+when the inventory is insufficient.
 
 ## Context-Efficient Exploration
 
-- Use Task tool with `subagent_type=Explore` for open-ended exploration
-- Use Grep for structure: `pub fn`, `impl.*for`, `^pub (struct|enum|type)`
-- Read specific lines with `offset`/`limit` parameters
-- Prefer API docs over full source files
+- Task tool with `subagent_type=Explore` for open-ended exploration.
+- Grep for structure: `pub fn`, `impl.*for`, `^pub (struct|enum|type)`.
+- Read specific lines with `offset`/`limit`; prefer API docs over full source.
 
 ## Code Style
 
-`cargo fmt` for formatting, `cargo clippy` for linting. Avoid `unwrap()`/`expect()` in library code.
-
-**Always run `cargo fmt --all` before committing changes.**
+`cargo fmt` and `cargo clippy`. Avoid `unwrap()`/`expect()` in library code.
+**Always run `cargo fmt --all` before committing.**
 
 ## Documentation Requirements
 
 ### Rustdoc Standards
 
-Every public type, trait, and function **must** have doc comments with the following:
+Every public type, trait, and function **must** have doc comments:
 
-**Types (struct/enum/trait):**
-- Summary: what it represents, when to use it (1-2 sentences)
-- Related types: relationship to similar types (e.g., "`TensorTrain` is the simple chain version; `TreeTN` is the general tree version")
-- `# Examples` section with runnable code and assertions
-
-**Functions/methods:**
-- Summary: what it does (1 sentence)
-- Arguments: meaning, constraints, typical values for each parameter (especially for `Options` types)
-- Returns: what is returned, how to use it
-- `# Panics` or `# Errors`: under what conditions it fails
-- `# Examples` section with runnable code and assertions
-
-**Options/Config types (critical for usability):**
-- Each field: meaning, recommended values, and default behavior
-- Field relationships and trade-offs (e.g., `rtol` vs `max_bond_dim`)
-- "When in doubt" defaults
+- **Types**: 1-2 sentence summary (what, when to use); relationship to similar
+  types (e.g. "`TensorTrain` is the simple chain version; `TreeTN` is the
+  general tree version"); `# Examples` with runnable asserted code.
+- **Functions/methods**: 1 sentence summary; arguments (meaning, constraints,
+  typical values, especially for `Options` types); returns (what is returned,
+  how to use it); `# Panics`/`# Errors` (under what conditions it fails);
+  `# Examples` with runnable asserted code.
+- **Options/Config types**: each field's meaning, recommended values, default
+  behavior; field relationships and trade-offs (e.g. `rtol` vs
+  `max_bond_dim`); "when in doubt" defaults.
 
 ### Code Example Rules
 
-- All doc examples **must** be runnable (`ignore` and `no_run` attributes are **prohibited**)
-- All doc examples **must** include assertions verifying correctness (not just compilation/execution)
-  - Use `assert!`, `assert_eq!`, `approx::assert_abs_diff_eq!`, etc.
-  - Weak smoke checks such as non-zero, non-empty, finite, shape-only, or
-    "rank is positive" are not enough unless that exact property is the
-    documented behavior. Prefer checking numerical values against known
-    answers, algebraic identities, reconstruction error, or structural
-    invariants that would catch an incorrect implementation.
-- mdBook guide code blocks follow the same rules: runnable with assertions
-- mdBook code blocks use hidden lines (`# ` prefix) for `use` statements and `fn main()` wrappers
+- All doc examples **must** be runnable (`ignore` and `no_run` are
+  **prohibited**) and **must** assert correctness (`assert!`, `assert_eq!`,
+  `approx::assert_abs_diff_eq!`, ...). Non-zero, non-empty, finite,
+  shape-only, or positive-rank checks are insufficient unless that property is
+  the documented behavior; check known values, algebraic identities,
+  reconstruction error, or structural invariants.
+- mdBook guide code blocks follow the same rules, with hidden lines (`# `
+  prefix) for `use` statements and `fn main()` wrappers.
 
 ### CI Verification
 
-- `cargo test --doc --release --workspace` must pass (rustdoc examples)
-- `./scripts/test-mdbook.sh` must pass (mdBook guide examples; raw `mdbook test docs/book` does not receive the resolved `--extern` flags that the guide snippets need)
+- `cargo test --doc --release --workspace` must pass.
+- `./scripts/test-mdbook.sh` must pass (raw `mdbook test docs/book` lacks the
+  resolved `--extern` flags the guide snippets need).
 
 ### Public Surface Drift
 
 - `README.md`, rustdoc, examples, and `skills/use-tensor4all-rs/` must not
-  claim more than the current public surface actually provides.
-- When changing public APIs, documented capabilities, or user-facing examples, check for stale names, stale capability claims, and references to removed paths or workflows.
-- Keep documentation slightly behind reality if validation is incomplete; do not advertise partially landed surfaces as stable or fully supported.
+  claim more than the current public surface provides.
+- When changing public APIs, documented capabilities, or user-facing examples,
+  check for stale names, stale capability claims, and references to removed
+  paths or workflows.
+- Keep documentation slightly behind reality if validation is incomplete; do
+  not advertise partially landed surfaces as stable.
 
 ### Online Tutorial Synchronization
 
-- The live online tutorials are in `docs/book/src/tutorials/`.
-- Runnable tutorial demos live in `docs/tutorial-code/src/bin/` with shared helpers in `docs/tutorial-code/src/`.
-- When changing public APIs, tutorial code, generated tutorial CSV/PNG artifacts, or examples quoted by the online tutorials, update the live mdBook tutorial page in the same branch.
-- Treat `docs/tutorial-code/docs/tutorials/` as legacy/reference material unless this policy is changed explicitly.
+- Live tutorials: `docs/book/src/tutorials/`. Runnable demos:
+  `docs/tutorial-code/src/bin/`, shared helpers in `docs/tutorial-code/src/`.
+- When changing public APIs, tutorial code, generated tutorial CSV/PNG
+  artifacts, or examples quoted by the tutorials, update the live mdBook
+  tutorial page in the same branch.
+- `docs/tutorial-code/docs/tutorials/` is legacy/reference material unless this
+  policy is changed explicitly.
 
 ## Error Handling
 
-- `anyhow` for internal error handling and context
-- `thiserror` for public API error types
+- `anyhow` for internal errors and context; `thiserror` for public API error
+  types.
 
 ### C API Error Handling
 
-The C API (`tensor4all-capi`) preserves error details through
-`t4a_last_error_message`. See `docs/CAPI_DESIGN.md` for the detailed ABI rules.
+`tensor4all-capi` preserves error details through `t4a_last_error_message`; ABI
+rules in `docs/CAPI_DESIGN.md`.
 
-- Fallible C API functions return `enum t4a_status_code`, not a bare `int`
-  or generic `StatusCode` typedef.
-- Use `run_catching`, `unwrap_catch`, `capi_error`, and `err_status` so
-  `Err(e)` values and panic payloads reach `t4a_last_error_message`.
-- **Do not add new `catch_unwind` / `Err(_) => T4A_INTERNAL_ERROR` patterns**
-  without preserving error messages.
-- Ordinary release builds omit Rust debug information. When debugging through
-  Tensor4all.jl or the C API requires source-level Rust backtraces, build with
-  `cargo build --profile release-debug -p tensor4all-capi` and set
-  `RUST_BACKTRACE=1` when running the caller.
+- Fallible C API functions return `enum t4a_status_code`, not a bare `int` or
+  generic `StatusCode` typedef.
+- Use `run_catching`, `unwrap_catch`, `capi_error`, and `err_status` so `Err(e)`
+  values and panic payloads reach `t4a_last_error_message`.
+- **No new `catch_unwind` / `Err(_) => T4A_INTERNAL_ERROR` patterns** that drop
+  error messages.
+- Release builds omit Rust debug info. For source-level backtraces through
+  Tensor4all.jl or the C API, build with
+  `cargo build --profile release-debug -p tensor4all-capi` and run the caller
+  with `RUST_BACKTRACE=1`.
 
 ## Testing
 
@@ -138,26 +131,35 @@ cargo nextest run --release --test test_name     # Specific test
 cargo nextest run --release -p crate_name        # Single crate
 ```
 
-**Always use `--release` mode for tests** to avoid excessive execution time in debug builds.
+**Always use `--release` for tests**; debug builds are too slow.
 
-- Private functions: `#[cfg(test)]` module in source file
-- Integration tests: `tests/` directory
-- Dense whole-result comparisons: avoid per-element re-contraction loops in tests. Materialize once to a dense tensor/matrix, then compare via tensor subtraction and `maxabs()`. `IdxTensor` subtraction aligns indices by index semantics, so explicit axis reordering is usually unnecessary.
-- **Test tolerance changes**: When relaxing test tolerances (unit tests, codecov targets, etc.), always seek explicit user approval before making changes.
-- **Dense whole-result comparisons**: When comparing full tensors/operators in tests, do not recompute contractions element-by-element. Materialize once to a dense tensor/matrix, then compare via tensor subtraction and `maxabs()`. `IdxTensor` subtraction aligns indices by index semantics, so explicit axis reordering is usually unnecessary.
+- Private functions: `#[cfg(test)]` module in the source file. Integration
+  tests: `tests/`.
+- **Dense whole-result comparisons**: do not recompute contractions
+  element-by-element. Materialize once to a dense tensor/matrix, then compare
+  via tensor subtraction and `maxabs()`. `IdxTensor` subtraction aligns indices
+  by semantics, so explicit axis reordering is usually unnecessary.
+- **Test tolerance changes** (unit tests, codecov targets, ...) require explicit
+  user approval.
 
 ### Coverage and Path Exercise
 
-- Each distinct control-flow path (error branches, layout variants, boundary conditions) needs a test. Happy-path only is insufficient.
-- When removing code, check whether the removed tests were the sole exerciser of any shared helper; add replacement coverage if so.
-- Before pushing a deletion PR, attest in the PR body that the removed code paths were reviewed for coverage impact (shared agent rules `common/docs-and-tests.md`: coverage is CI-owned, the local pre-PR gate is attestation-based). The CI coverage job is the authoritative measurement; a local llvm-cov run is optional:
+- Every distinct control-flow path (error branches, layout variants, boundary
+  conditions) needs a test; happy-path only is insufficient.
+- When removing code, check whether the removed tests were the sole exerciser
+  of a shared helper and add replacement coverage.
+- Before pushing a deletion PR, attest in the PR body that removed code paths
+  were reviewed for coverage impact (shared rules `common/docs-and-tests.md`:
+  coverage is CI-owned, the local gate is attestation-based). CI coverage is
+  authoritative; a local run is optional:
 
 ```bash
 cargo llvm-cov --release --workspace --exclude tensor4all-hdf5 --json --output-path coverage.json
 python3 scripts/check-coverage.py coverage.json
 ```
 
-Fix drops by adding tests, not by lowering thresholds (threshold changes need explicit approval).
+Fix drops by adding tests, not by lowering thresholds (threshold changes need
+explicit approval).
 
 ## API Design
 
@@ -165,28 +167,28 @@ Only make functions `pub` when truly public API.
 
 ### Layering and Maintainability
 
-**Respect crate boundaries and abstraction layers.**
+**Respect crate boundaries and abstraction layers**, in library and test code
+alike.
 
-- **Never access low-level APIs or internal data structures from downstream crates.** Use high-level public methods instead of directly manipulating internal representations.
-- **Use high-level APIs.** If downstream code needs low-level access, create appropriate high-level APIs rather than exposing internal details.
-- **Prefer type-generic Rust APIs.** If a public Rust library API can be expressed generically, do not introduce scalar-specific entry points such as `*_f64` / `*_c64`. Add or use a generic API instead, and prefer the generic form in library code, tests, examples, and docs. This rule does not apply to the C API / FFI boundary, where scalar-specific names may be appropriate.
-- **Examples:**
-  - Instead of `match scalar { AnyScalar::F64(x) => ... }`, use `scalar.real()`, `scalar.is_complex()`, `scalar.is_zero()`
-  - Instead of `AnyScalar::F64(1.0)`, use `AnyScalar::new_real(1.0)`
-  - Instead of `AnyScalar::C64(z)`, use `AnyScalar::new_complex(re, im)`
+- **Never access low-level APIs or internal data structures from downstream
+  crates.** If downstream code needs low-level access, add a high-level API
+  instead of exposing internals.
+- **Prefer type-generic Rust APIs.** No scalar-specific entry points such as
+  `*_f64` / `*_c64` when a generic form is possible; prefer the generic form in
+  library code, tests, examples, and docs. The C API / FFI boundary is exempt.
+- Examples: `scalar.real()`, `scalar.is_complex()`, `scalar.is_zero()` instead
+  of `match scalar { AnyScalar::F64(x) => ... }`; `AnyScalar::new_real(1.0)`
+  instead of `AnyScalar::F64(1.0)`; `AnyScalar::new_complex(re, im)` instead
+  of `AnyScalar::C64(z)`.
 
-**This applies to both library code and test code.** Tests should also use public APIs to maintain consistency and reduce maintenance burden when internal representations change.
-
-**No ad hoc fixes:**
-
-- Do not add ad hoc fixes that violate DRY, KISS, or layering.
-- Do not introduce compatibility shims, duplicated implementations, or downstream reach-through into lower-level internals when a higher-level seam should exist instead.
-- If a needed behavior does not fit the current abstraction cleanly, add or refine the appropriate seam instead of patching around it locally.
+**No ad hoc fixes:** nothing that violates DRY, KISS, or layering; no
+compatibility shims, duplicated implementations, or downstream reach-through
+where a higher-level seam should exist. If a behavior does not fit the current
+abstraction, add or refine the seam.
 
 ### Code Deduplication
 
-- **Avoid duplicate test code.** Use macros, functions, or generic functions to share test logic.
-- **Example pattern for testing f64/Complex64:**
+Avoid duplicate test code: share via macros, functions, or generics.
 
 ```rust
 fn test_op_generic<T: Scalar + From<f64>>() { /* test */ }
@@ -199,52 +201,50 @@ fn test_op_c64() { test_op_generic::<Complex64>(); }
 
 ### Dense Layout And Linear Algebra
 
-- Dense flat-buffer APIs use **column-major** linearization. New public
-  constructors, exports, examples, FFI contracts, and docs must state or
-  preserve column-major semantics.
-- Do not add row-major compatibility shims or hidden row-major round-trips in
-  library code. If external data is naturally row-shaped, convert privately at
-  that explicit boundary.
-- Reuse `tensor4all-tensorbackend::Matrix` for dense matrix values crossing crate
-  boundaries. Do not introduce duplicate public matrix containers in downstream
-  crates.
+- Dense flat-buffer APIs are **column-major**. New public constructors,
+  exports, examples, FFI contracts, and docs must state or preserve this.
+- No row-major compatibility shims or hidden round-trips in library code;
+  convert row-shaped external data privately at that explicit boundary.
+- Reuse `tensor4all-tensorbackend::Matrix` for dense matrices crossing crate
+  boundaries; no duplicate public matrix containers downstream.
 - Use tenferro-backed `tensor4all-tensorbackend` / existing tensor4all
-  abstractions for SVD, QR, einsum, and dense tensor linear algebra instead of
-  local reimplementations.
+  abstractions for SVD, QR, einsum, and dense linear algebra, not local
+  reimplementations.
 - Canonical integrations supply a configured `CpuBackend` to
   `tensor4all_tensorbackend::CpuExecutionContext`; legacy convenience APIs may
-  use `with_default_backend` behind the `global-defaults` feature. Do not create
+  use `with_default_backend` behind the `global-defaults` feature. Never create
   an unconfigured fallback backend in downstream operation code.
 - `Tensor3Ops::slice_site`, `Tensor4Ops::slice_site`, and dense/full-tensor
   exports return column-major flat data.
 
 ## C API & Language Bindings
 
-See `docs/CAPI_DESIGN.md` for C API patterns. Bindings: [Tensor4all.jl](https://github.com/tensor4all/Tensor4all.jl) (separate repo). The C API is the binding boundary; see `docs/CAPI_DESIGN.md`.
+The C API is the binding boundary; patterns in `docs/CAPI_DESIGN.md`. Bindings:
+[Tensor4all.jl](https://github.com/tensor4all/Tensor4all.jl) (separate repo).
 
-Truncation tolerance: support both `cutoff` (ITensors) and `rtol` (tensor4all-rs). Conversion: `rtol = √cutoff`.
+Truncation tolerance: support both `cutoff` (ITensors) and `rtol`
+(tensor4all-rs); `rtol = √cutoff`.
 
 ### Cross-repo development with Tensor4all.jl
 
-When a Tensor4all.jl feature requires new C API functions:
+When a Tensor4all.jl feature needs new C API functions:
 
-1. Develop both sides locally. Tensor4all.jl's `deps/build.jl` can use a local
+1. Develop both sides locally; Tensor4all.jl's `deps/build.jl` uses a local
    Rust build via `TENSOR4ALL_RS_PATH`.
 2. Test both sides locally until all tests pass.
 3. Create and merge the tensor4all-rs PR **first**.
-4. Then update the pin hash in Tensor4all.jl `deps/build.jl` to the merged
-   commit on remote and create the Tensor4all.jl PR.
+4. Update the pin hash in Tensor4all.jl `deps/build.jl` to the merged remote
+   commit and create the Tensor4all.jl PR.
 
-Issue templates are in `.github/ISSUE_TEMPLATE/`. Feature requests from
-Tensor4all.jl should link the related Julia-side issue.
+Issue templates: `.github/ISSUE_TEMPLATE/`. Feature requests from Tensor4all.jl
+link the related Julia-side issue.
 
 ## Dependencies
 
 - Prefer existing tensor4all core/tcicore/simplett abstractions and
-  tenferro-backed `tensor4all-tensorbackend` operations for arrays and linear
-  algebra. Add direct array/linalg dependencies only when the established
-  abstraction is genuinely insufficient.
-- SVD singular values: `s[[0, i]]` not `s[[i, i]]`
+  tenferro-backed `tensor4all-tensorbackend` for arrays and linear algebra. Add
+  direct array/linalg dependencies only when those are genuinely insufficient.
+- SVD singular values: `s[[0, i]]`, not `s[[i, i]]`.
 
 ## Git Workflow
 
@@ -252,18 +252,17 @@ Tensor4all.jl should link the related Julia-side issue.
 
 ### Base Branch Synchronization
 
-- At the start of work, run `git fetch origin` and branch from `origin/main`
-  rather than a stale local `main`.
-- Before treating PR checks as final, fetch `origin` and verify that the PR
-  branch contains the current `origin/main`.
-- If a PR is behind `main`, update the PR branch from `origin/main` before
-  relying on checks, enabling auto-merge, or declaring it ready to merge.
-- After updating from `origin/main`, re-monitor CI; earlier green checks do not
-  prove the synchronized branch is green.
+- Start work with `git fetch origin` and branch from `origin/main`, not a stale
+  local `main`.
+- Before treating PR checks as final, fetch `origin` and verify the PR branch
+  contains current `origin/main`. If behind, update from `origin/main` before
+  relying on checks, enabling auto-merge, or declaring it ready.
+- After updating, re-monitor CI; earlier green checks do not cover the
+  synchronized branch.
 
 ### Pre-PR Checks (matches CI)
 
-Run before pushing. CI runs the same checks, but local = faster feedback:
+Run before pushing.
 
 ```bash
 cargo fmt --all                        # Auto-fix formatting
@@ -279,46 +278,45 @@ cargo doc --workspace --no-deps        # Build rustdoc
 ### Repository Rules Review Bot
 
 `.github/workflows/review_bot.yml` reviews every PR diff against
-`REPOSITORY_RULES.md`. It runs from the trusted base revision and treats PR
-contents as data: the PR head is fetched for `git diff` only, never checked out
-or executed. Findings post as a single updating PR comment; only
-`block`-severity findings fail the check.
+`REPOSITORY_RULES.md` and `PERFORMANCE_TIPS.md` from the trusted base
+revision; the PR head is fetched for `git diff` only, never checked out or
+executed. Findings post as one updating PR comment; only `block`-severity
+findings fail the check.
 
-Preview the review locally before pushing:
+Preview locally before pushing:
 
 ```bash
 python3 scripts/repository-rules-review.py --base main --worktree --dry-run
 python3 scripts/test-repository-rules-review.py   # the script's own tests
 ```
 
-Drop `--dry-run` to include the LLM pass; it needs `DEEPSEEK_API_KEY` in the
-environment or in a repo-root `.env` (`pip install -r scripts/requirements-dev.txt`).
-
-The system prompt lives in `ai/prompts/repository-rules-review.md`. Three
-deterministic checks run before the LLM and independently of it:
+Drop `--dry-run` for the LLM pass; it needs `DEEPSEEK_API_KEY` in the
+environment or a repo-root `.env` (`pip install -r scripts/requirements-dev.txt`).
+System prompt: `ai/prompts/repository-rules-review.md`. Three deterministic
+checks run before and independently of the LLM:
 
 | Check | Rule | Baseline |
 |-------|------|----------|
-| Secret-shaped text in added lines | — | Blocks the upload before anything reaches the API |
+| Secret-shaped text in added lines | (none) | Blocks the upload before anything reaches the API |
 | New direct `tenferro-*` dependency outside `tensor4all-tensorbackend` | Dense Layout And Linear Algebra | #566 Phase 3 backlog: core, tcicore, simplett, treetci |
 | Added `ignore` / `no_run` doctest fence | Documentation Examples | #566 Phase 1 backlog: 2 `no_run` sites |
 
-Both rule checks are delta-scoped: they reject new violations without failing on
-the recorded backlog. The tenferro check parses Cargo.toml table context, so
-`tenferro-*` **feature** names are not mistaken for dependencies, and
-`dev-dependencies` are out of scope.
+Both rule checks are delta-scoped: new violations fail, the recorded backlog
+does not. The tenferro check parses Cargo.toml table context, so `tenferro-*`
+**feature** names are not mistaken for dependencies and `dev-dependencies` are
+out of scope.
 
-Maintainer escape hatches, both requiring the `maintain`/`admin` role and
-reapplication after the latest push:
+Maintainer escape hatches (`maintain`/`admin` role, reapply after the latest
+push):
 
 | Label | Effect |
 |-------|--------|
 | `rules-review:no-llm` | Skips the LLM pass; deterministic checks still run |
 | `rules-review:waive` | Waives the review entirely |
 
-When adding a `## ` section to `REPOSITORY_RULES.md`, also route it in
-`SECTION_TRIGGERS` (or `ALWAYS_SECTIONS` / `HUMAN_ONLY_SECTIONS`); an unrouted
-section is never shown to the reviewer, and
+When adding a `## ` section to `REPOSITORY_RULES.md` or `PERFORMANCE_TIPS.md`,
+route it in `SECTION_TRIGGERS` (or `ALWAYS_SECTIONS` / `HUMAN_ONLY_SECTIONS`);
+an unrouted section is never shown to the reviewer and
 `test_every_rule_section_is_reachable` fails.
 
 | Change Type | Workflow |
@@ -347,25 +345,24 @@ gh run view <RUN_ID> --log-failed
 
 ### New Public Crate Checklist
 
-Before creating a PR that adds a public workspace crate, complete every
-applicable item below. Mark an item not applicable explicitly in the PR body
-rather than silently omitting it.
+Before a PR that adds a public workspace crate, complete every applicable item;
+mark inapplicable items explicitly in the PR body.
 
 - [ ] Add the crate to the workspace and the root `README.md` crate map.
 - [ ] Add the crate and its primary use cases to `llms.txt` with a direct link
       to the most useful guide for a new user or coding agent.
-- [ ] Update `docs/book/src/architecture.md`, including the layer diagram,
-      crate table, and goal-to-crate selection table where applicable.
+- [ ] Update `docs/book/src/architecture.md` (layer diagram, crate table,
+      goal-to-crate selection table).
 - [ ] Add or update an mdBook guide and register it in
       `docs/book/src/SUMMARY.md`.
-- [ ] Link the new guide from related existing guides so that users do not need
-      to know the new crate name in advance.
+- [ ] Link the new guide from related guides so users need not know the crate
+      name in advance.
 - [ ] Add a crate `README.md` or an equally clear docs.rs landing page.
-- [ ] Provide a runnable, asserted example that exercises the crate's primary
+- [ ] Provide a runnable, asserted example exercising the crate's primary
       nontrivial code path; a degenerate shortcut or smoke test is not enough.
 - [ ] Remove developer-local absolute paths and references to inaccessible
       design material from committed documentation.
 - [ ] Run workspace doctests and `./scripts/test-mdbook.sh`.
 
-For every PR, verify that the root `README.md` remains accurate, including the
-project structure and examples.
+For every PR, verify the root `README.md` remains accurate, including project
+structure and examples.
