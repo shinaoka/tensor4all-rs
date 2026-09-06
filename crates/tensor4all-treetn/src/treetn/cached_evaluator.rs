@@ -200,10 +200,47 @@ pub(crate) mod contraction_diagnostics {
 
     pub fn add(counter: &AtomicU64, elapsed: std::time::Duration) {
         counter.fetch_add(elapsed.as_nanos() as u64, Ordering::Relaxed);
+        use super::diagnostics::{nanos, record_kernel, KernelDiagnostics};
+        let ns = nanos(elapsed);
+        let mut delta = KernelDiagnostics::default();
+        if std::ptr::eq(counter, &BRANCH_SETUP_NS) {
+            delta.setup_ns = ns;
+        }
+        if std::ptr::eq(counter, &BRANCH_MATMUL_NS) {
+            delta.matmul_ns = ns;
+        }
+        if std::ptr::eq(counter, &BRANCH_ACCUMULATE_NS) {
+            delta.accumulate_ns = ns;
+        }
+        if std::ptr::eq(counter, &BRANCH_CHILD_GATHER_NS) {
+            delta.gather_ns = ns;
+        }
+        record_kernel(delta);
     }
 
     pub fn inc(counter: &AtomicU64, by: usize) {
         counter.fetch_add(by as u64, Ordering::Relaxed);
+        use super::diagnostics::{record_kernel, KernelDiagnostics};
+        let n = by as u64;
+        let mut delta = KernelDiagnostics::default();
+        if std::ptr::eq(counter, &BRANCH_BLAS_CALLS) || std::ptr::eq(counter, &CHAIN_BLAS_CALLS) {
+            delta.matmul_calls = n;
+        }
+        if std::ptr::eq(counter, &BRANCH_SCALAR_POINTS)
+            || std::ptr::eq(counter, &CHAIN_SCALAR_POINTS)
+        {
+            delta.scalar_points = n;
+        }
+        if std::ptr::eq(counter, &BRANCH_PREPARED_SLICE_HITS) {
+            delta.prepared_hits = n;
+        }
+        if std::ptr::eq(counter, &BRANCH_PREPARED_SLICE_MISSES) {
+            delta.prepared_misses = n;
+        }
+        if std::ptr::eq(counter, &BRANCH_PREPARED_SLICE_REFUSALS) {
+            delta.prepared_refusals = n;
+        }
+        record_kernel(delta);
     }
 
     pub fn reset_all() {
@@ -971,6 +1008,11 @@ where
 /// ```
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct CachedEvaluatorOptions<V> {
+    /// Operand label for opt-in per-node diagnostics, e.g. `"input:0"`.
+    /// Defaults to `"tree"`; assign distinct labels to distinct evaluators
+    /// sharing a diagnostics window. Has no effect without the feature.
+    #[cfg(feature = "diagnostics")]
+    pub diagnostic_namespace: String,
     /// Fixed center node for evaluation.
     ///
     /// When set, greedy center search is skipped. Use this when the caller
@@ -1008,6 +1050,8 @@ pub struct CachedEvaluatorOptions<V> {
 impl<V> Default for CachedEvaluatorOptions<V> {
     fn default() -> Self {
         Self {
+            #[cfg(feature = "diagnostics")]
+            diagnostic_namespace: "tree".to_owned(),
             center: None,
             initial_centers: Vec::new(),
             max_greedy_steps_per_start: None,
@@ -2016,6 +2060,8 @@ where
         values: ColMajorArrayRef<'_, usize>,
         hint: EvaluationHint<V>,
     ) -> std::result::Result<Vec<CachedScalar>, TreeTNOperationError> {
+        #[cfg(feature = "diagnostics")]
+        let query_started = std::time::Instant::now();
         validate_values_shape(
             values,
             self.layout().n_indices,
@@ -2060,7 +2106,84 @@ where
         phase_timing::add(&phase_timing::CENTER_NS, center_started.elapsed());
         let results = result?;
         self.last_stats.batched_center_contract_count = 1;
+        #[cfg(feature = "diagnostics")]
+        {
+            let (node, shape) = self.diagnostic_node(&center)?;
+            diagnostics::record_query(
+                &node,
+                shape,
+                query_started.elapsed(),
+                values.shape()[1],
+                self.diagnostic_cache(),
+            );
+        }
         Ok(results)
+    }
+
+    #[cfg(feature = "diagnostics")]
+    fn diagnostic_node(&self, node: &V) -> Result<(String, diagnostics::NodeShape)> {
+        let bond_dims = self
+            .tree
+            .site_index_network()
+            .neighbors(node)
+            .map(|neighbor| {
+                self.tree
+                    .edge_between(node, &neighbor)
+                    .and_then(|edge| self.tree.bond_index(edge))
+                    .map(|index| index.dim())
+                    .ok_or_else(|| anyhow::anyhow!("diagnostic node has no incident bond"))
+            })
+            .collect::<Result<Vec<_>>>()?;
+        let physical_dim = self
+            .layout()
+            .entries_by_node
+            .get(node)
+            .into_iter()
+            .flatten()
+            .try_fold(1usize, |n, entry| {
+                n.checked_mul(entry.index.dim())
+                    .ok_or_else(|| anyhow::anyhow!("diagnostic physical dimension overflows usize"))
+            })?;
+        Ok((
+            format!("{}:{node:?}", self.options.diagnostic_namespace),
+            diagnostics::NodeShape {
+                physical_dim,
+                bond_dims,
+            },
+        ))
+    }
+
+    #[cfg(feature = "diagnostics")]
+    fn diagnostic_cache(&self) -> diagnostics::CacheDiagnostics {
+        let mut result = diagnostics::CacheDiagnostics {
+            message_owned_bytes: hash_map_owned_bytes_estimate(&self.message_caches),
+            prepared_entries: self.prepared_branch_slices_f64.slices.len()
+                + self.prepared_branch_slices_c64.slices.len(),
+            prepared_payload_bytes: self.prepared_branch_slices_f64.retained_bytes()
+                + self.prepared_branch_slices_c64.retained_bytes(),
+            ..Default::default()
+        };
+        for cache in self.message_caches.values() {
+            result.message_entries = result.message_entries.saturating_add(cache.key_count());
+            result.message_payload_bytes = result
+                .message_payload_bytes
+                .saturating_add(cache.logical_payload_bytes());
+            // The outer map already accounts for the inline cache value.
+            result.message_owned_bytes = result.message_owned_bytes.saturating_add(
+                cache
+                    .owned_retained_bytes_estimate()
+                    .saturating_sub(std::mem::size_of_val(cache)),
+            );
+        }
+        result.prepared_owned_bytes = result
+            .prepared_payload_bytes
+            .saturating_add(hash_map_owned_bytes_estimate(
+                &self.prepared_branch_slices_f64.slices,
+            ))
+            .saturating_add(hash_map_owned_bytes_estimate(
+                &self.prepared_branch_slices_c64.slices,
+            ));
+        result
     }
 
     fn ensure_center(&mut self, values: ColMajorArrayRef<'_, usize>) -> Result<&V> {
@@ -2652,6 +2775,8 @@ where
             .ok_or_else(|| anyhow::anyhow!("chain matrix shape overflows usize"))?;
         let mut output = vec![T::default(); output_len];
         for (physical_value, points) in groups {
+            #[cfg(feature = "diagnostics")]
+            let setup_started = std::time::Instant::now();
             let mut left = vec![T::default(); matrix_len];
             for child_value in 0..child_dim {
                 for parent_value in 0..parent_dim {
@@ -2696,11 +2821,25 @@ where
 
             #[cfg(feature = "diagnostics")]
             contraction_diagnostics::inc(&contraction_diagnostics::CHAIN_BLAS_CALLS, 1);
+            #[cfg(feature = "diagnostics")]
+            diagnostics::record_kernel(diagnostics::KernelDiagnostics {
+                setup_ns: diagnostics::nanos(setup_started.elapsed()),
+                ..Default::default()
+            });
+            #[cfg(feature = "diagnostics")]
+            let matmul_started = std::time::Instant::now();
             let product = mat_mul_owned(
                 Matrix::from_col_major_vec(parent_dim, child_dim, left),
                 Matrix::from_col_major_vec(child_dim, points.len(), right),
             )
             .map_err(anyhow::Error::from)?;
+            #[cfg(feature = "diagnostics")]
+            diagnostics::record_kernel(diagnostics::KernelDiagnostics {
+                matmul_ns: diagnostics::nanos(matmul_started.elapsed()),
+                ..Default::default()
+            });
+            #[cfg(feature = "diagnostics")]
+            let accumulate_started = std::time::Instant::now();
             for (column, &point) in points.iter().enumerate() {
                 let destination = point
                     .checked_mul(parent_dim)
@@ -2717,6 +2856,11 @@ where
                 output[destination..destination_end]
                     .copy_from_slice(&product.as_col_major_slice()[source..source_end]);
             }
+            #[cfg(feature = "diagnostics")]
+            diagnostics::record_kernel(diagnostics::KernelDiagnostics {
+                accumulate_ns: diagnostics::nanos(accumulate_started.elapsed()),
+                ..Default::default()
+            });
         }
         #[cfg(feature = "diagnostics")]
         contraction_diagnostics::add(
@@ -4182,21 +4326,9 @@ where
         #[cfg(feature = "diagnostics")]
         let diag_start = std::time::Instant::now();
         #[cfg(feature = "diagnostics")]
-        let (diag_coordination_number, diag_bond_dims) = {
-            let neighbors: Vec<V> = self.tree.site_index_network().neighbors(node).collect();
-            // One entry per neighbor, so `bond_dims.len()` always equals the
-            // coordination number; an unavailable dimension records `0`.
-            let bond_dims = neighbors
-                .iter()
-                .map(|neighbor| {
-                    self.tree
-                        .edge_between(node, neighbor)
-                        .and_then(|edge| self.tree.bond_index(edge))
-                        .map_or(0, |index| index.dim())
-                })
-                .collect::<Vec<_>>();
-            (neighbors.len(), bond_dims)
-        };
+        let diag_kernel_start = diagnostics::kernel_snapshot();
+        #[cfg(feature = "diagnostics")]
+        let (diag_node, diag_shape) = self.diagnostic_node(node)?;
         let points = assignment_batch.first_points.clone();
         let keys = assignment_batch.keys.clone();
 
@@ -4288,12 +4420,14 @@ where
                 self.last_stats.message_cache_hits += keys.len();
                 #[cfg(feature = "diagnostics")]
                 diagnostics::record_guard(
-                    &format!("{node:?}"),
-                    diag_coordination_number,
-                    &diag_bond_dims,
-                    diag_start.elapsed(),
-                    keys.len() as u64,
-                    0,
+                    &diag_node,
+                    diag_shape,
+                    diagnostics::PhaseMeasurement {
+                        elapsed: diag_start.elapsed(),
+                        hits: keys.len() as u64,
+                        misses: 0,
+                        kernel: diagnostics::kernel_snapshot().since(diag_kernel_start),
+                    },
                 );
                 return Ok(StackedMessage {
                     assignment_index,
@@ -4334,6 +4468,10 @@ where
         // A parent cache hit returned above before this point, so descendants
         // are consulted only when at least one parent column is missing.
         let children = plan.children.get(node).cloned().unwrap_or_default();
+        #[cfg(feature = "diagnostics")]
+        let children_started = std::time::Instant::now();
+        #[cfg(feature = "diagnostics")]
+        let children_kernel_start = diagnostics::kernel_snapshot();
         for child in children {
             if !messages.contains_key(&child) {
                 let child_message = self.get_or_compute_node_message(
@@ -4346,6 +4484,11 @@ where
                 messages.insert(child, child_message);
             }
         }
+
+        #[cfg(feature = "diagnostics")]
+        let children_elapsed = children_started.elapsed();
+        #[cfg(feature = "diagnostics")]
+        let children_kernel = diagnostics::kernel_snapshot().since(children_kernel_start);
 
         // Compute only the missing points, as a batch of just that size.
         let missing_points = missing_indices
@@ -4573,12 +4716,16 @@ where
         phase_timing::add(&phase_timing::RECONSTRUCT_NS, reconstruct_start.elapsed());
         #[cfg(feature = "diagnostics")]
         diagnostics::record_guard(
-            &format!("{node:?}"),
-            diag_coordination_number,
-            &diag_bond_dims,
-            diag_start.elapsed(),
-            diag_hits,
-            diag_misses,
+            &diag_node,
+            diag_shape,
+            diagnostics::PhaseMeasurement {
+                elapsed: diag_start.elapsed().saturating_sub(children_elapsed),
+                hits: diag_hits,
+                misses: diag_misses,
+                kernel: diagnostics::kernel_snapshot()
+                    .since(diag_kernel_start)
+                    .since(children_kernel),
+            },
         );
         Ok(StackedMessage {
             assignment_index,
@@ -6140,6 +6287,8 @@ where
         .first()
         .ok_or_else(|| anyhow::anyhow!("multi-branch grouped kernel needs at least one child"))?;
     for (physical_value, points) in groups {
+        #[cfg(feature = "diagnostics")]
+        let setup_started = std::time::Instant::now();
         let left = prepare_multi_branch_slice(spec, raw, physical_value)?;
         let mut right = Vec::with_capacity(first_dim * points.len());
         for &point in &points {
@@ -6155,11 +6304,26 @@ where
                     .ok_or_else(|| anyhow::anyhow!("multi-branch child column is out of bounds"))?,
             );
         }
+        #[cfg(feature = "diagnostics")]
+        diagnostics::record_kernel(diagnostics::KernelDiagnostics {
+            setup_ns: diagnostics::nanos(setup_started.elapsed()),
+            ..Default::default()
+        });
+        #[cfg(feature = "diagnostics")]
+        let matmul_started = std::time::Instant::now();
         let intermediate = mat_mul_owned(
             Matrix::from_col_major_vec(rows, first_dim, left),
             Matrix::from_col_major_vec(first_dim, points.len(), right),
         )
         .map_err(anyhow::Error::from)?;
+        #[cfg(feature = "diagnostics")]
+        diagnostics::record_kernel(diagnostics::KernelDiagnostics {
+            matmul_ns: diagnostics::nanos(matmul_started.elapsed()),
+            matmul_calls: 1,
+            ..Default::default()
+        });
+        #[cfg(feature = "diagnostics")]
+        let accumulate_started = std::time::Instant::now();
         let intermediate = intermediate.as_col_major_slice();
         for (column, &point) in points.iter().enumerate() {
             let start = column * rows;
@@ -6178,6 +6342,11 @@ where
             let destination = point * spec.parent_dim;
             output[destination..destination + spec.parent_dim].copy_from_slice(&folded);
         }
+        #[cfg(feature = "diagnostics")]
+        diagnostics::record_kernel(diagnostics::KernelDiagnostics {
+            accumulate_ns: diagnostics::nanos(accumulate_started.elapsed()),
+            ..Default::default()
+        });
     }
     Ok(output)
 }
@@ -6210,6 +6379,11 @@ where
         .checked_mul(physical_values.len())
         .ok_or_else(|| anyhow::anyhow!("multi-branch work estimate overflows usize"))?;
     if scalar_work < BRANCH_BLAS_WORK_THRESHOLD || prepared > MULTI_BRANCH_MAX_PREPARED_ELEMENTS {
+        #[cfg(feature = "diagnostics")]
+        diagnostics::record_kernel(diagnostics::KernelDiagnostics {
+            scalar_points: physical_values.len() as u64,
+            ..Default::default()
+        });
         #[cfg(test)]
         record_multi_branch_route(false);
         return scalar_multi_branch_message_contraction(spec, raw, physical_values, child_columns);
@@ -6974,7 +7148,7 @@ struct PackedMessageCache<K, T> {
 // allocator-specific byte measurement.
 const HASH_MAP_BUCKET_OVERHEAD_ESTIMATE_BYTES: usize = 16;
 
-#[cfg(test)]
+#[cfg(any(test, feature = "diagnostics"))]
 fn hash_map_owned_bytes_estimate<K, V>(map: &HashMap<K, V>) -> usize {
     let per_bucket = std::mem::size_of::<K>()
         .saturating_add(std::mem::size_of::<V>())
@@ -9342,8 +9516,6 @@ mod tests {
     #[cfg(feature = "diagnostics")]
     #[test]
     fn grouped_branch_contraction_counts_one_blas_dispatch_per_physical_group() {
-        use std::sync::atomic::Ordering;
-
         let parent_dim = 8;
         let child_dim_1 = 8;
         let child_dim_2 = 8;
@@ -9365,7 +9537,7 @@ mod tests {
         let child1_columns = vec![1.0_f64; point_count * child_dim_1];
         let child2_columns = vec![1.0_f64; point_count * child_dim_2];
 
-        contraction_diagnostics::reset_all();
+        diagnostics::reset();
         TreeTNCachedEvaluator::<usize>::grouped_branch_message_contraction(
             spec,
             &raw,
@@ -9376,14 +9548,9 @@ mod tests {
         .unwrap();
 
         assert_eq!(
-            contraction_diagnostics::BRANCH_BLAS_CALLS.load(Ordering::Relaxed),
+            diagnostics::kernel_snapshot().matmul_calls,
             2,
             "each physical-value group dispatches one matrix multiplication"
-        );
-        assert_eq!(
-            contraction_diagnostics::BRANCH_BLAS_GROUPS.load(Ordering::Relaxed),
-            2,
-            "the dispatch count should agree with the group count"
         );
 
         let chain_parent_dim = 64;
@@ -9399,7 +9566,7 @@ mod tests {
         let chain_raw = vec![1.0_f64; 2 * chain_parent_dim * chain_child_dim];
         let chain_child_columns = vec![1.0_f64; point_count * chain_child_dim];
 
-        contraction_diagnostics::reset_all();
+        diagnostics::reset();
         TreeTNCachedEvaluator::<usize>::grouped_chain_message_contraction(
             chain_spec,
             &chain_raw,
@@ -9409,7 +9576,7 @@ mod tests {
         .unwrap();
 
         assert_eq!(
-            contraction_diagnostics::CHAIN_BLAS_CALLS.load(Ordering::Relaxed),
+            diagnostics::kernel_snapshot().matmul_calls,
             2,
             "each physical-value group dispatches one chain matrix multiplication"
         );
@@ -10562,13 +10729,13 @@ mod tests {
         let snapshot = diagnostics::snapshot();
         let hub_record = snapshot
             .iter()
-            .find(|record| record.node == "0")
+            .find(|record| record.node == "tree:0")
             .expect("hub node (0) recorded");
         assert_eq!(hub_record.coordination_number, 3);
         assert_eq!(hub_record.bond_dims.len(), 3);
         assert!(hub_record.guard_cache_hits + hub_record.guard_cache_misses > 0);
 
-        for leaf in ["2", "3"] {
+        for leaf in ["tree:2", "tree:3"] {
             let leaf_record = snapshot
                 .iter()
                 .find(|record| record.node == leaf)

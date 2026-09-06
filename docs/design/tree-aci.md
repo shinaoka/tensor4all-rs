@@ -92,7 +92,7 @@ the run boundary releases all of them.
 | contents | immutable component-sample records and deduplication keys | exact directed component contractions plus optional candidate contractions | directed subtree messages reused across floating-zone batches |
 | aggregate bound | `max_sample_arena_bytes`, 256 MiB | `max_frame_bytes`, 256 MiB | `message_cache_max_bytes`, 256 MiB shared across all evaluators |
 | per-entry bound | -- | `max_frame_elements`, unset by default and then a quarter of `max_working_bytes` (`2^24` f64 elements at the 512 MiB default) | -- |
-| accounting | `sample_arena_records`, `sample_arena_retained_bytes` | `frame_records`, `frame_retained_bytes` | bounded but not currently exposed in diagnostics |
+| accounting | `sample_arena_records`, `sample_arena_retained_bytes` | `frame_records`, `frame_retained_bytes` | opt-in `branch_diagnostics::snapshot()`, `query_cache` |
 
 Mandatory arena and directed-frame bounds are checked before allocation, so an
 over-budget run is refused instead of first reaching the configured peak.
@@ -121,8 +121,39 @@ byte budget is checked before any ceiling derived from it, so an impossible
 budget is reported as `working bytes` rather than as a derived ceiling.
 
 The two state-owned cache families report through `TreeAciDiagnostics`, in the
-same logical-byte units. Evaluator messages obey their aggregate option bound
-but do not yet have a diagnostic counter.
+same logical-byte units. With the `diagnostics` feature, `query_cache` reports
+message and prepared-slice entries, logical payload and owned-byte estimates.
+These are whole-evaluator high-water observations attached to query-center
+records, so do not sum them across nodes or output shapes. Estimates include
+message vector capacity and hash-table buckets, but exclude backend allocator
+arenas and dynamic allocations inside generic node labels.
+
+## Per-node performance attribution
+
+Enable `tensor4all-treeaci/diagnostics`, call `branch_diagnostics::reset()`
+before a measurement window and read `snapshot()` afterward. Sorted records
+distinguish `input:N:node` and `output:node`, and retain separate actual physical
+and incident-bond shapes when output ranks change. `local_elements` is the
+checked proxy `d * product(bond_dims)`, not a FLOP count. Message batches count
+unique subtree assignments, frame batches count candidate samples, and query
+batches count caller-supplied full points. Their denominators are not
+interchangeable.
+
+`guard_ns` excludes recursive child messages; `frame_ns` includes candidate
+contraction and final packing. `query_ns` is inclusive of the whole evaluator
+query and must not be added to message/frame time. Kernel snapshots are
+thread-local, so setup, matrix multiplication, accumulation, gathering, and
+prepared-slice hits/misses/refusals belong to the measured node. Scalar and
+other uninstrumented work remains in the enclosing phase time. The legacy
+`contraction_summary()` is process-wide and unsuitable for per-node attribution.
+
+The observer stores aggregate rows rather than per-point histories. Its memory
+scales with distinct operand/node/shapes in the chosen window; resetting releases
+those rows. It adds no numerical cache and does not change contraction dispatch.
+Instrumentation and cache-accounting overhead are included in measured wall
+time; use a feature-disabled build for production timing, and measure observer
+overhead separately. The reproducible experiment and dimension-adjusted model
+are described in `benchmarks/README.md` (issue #732).
 
 The crate exposes native TreeTN elementwise and simultaneous n-way Hadamard
 entry points. Input message caches now persist across guard scans, while the
