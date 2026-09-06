@@ -624,6 +624,9 @@ impl<'a, V: TreeAciNode> InputEvaluators<'a, V> {
         Self::new_with_message_cache_max_bytes(inputs, problem, usize::MAX)
     }
 
+    // The operand index only labels diagnostics, so the enumeration is
+    // deliberately unused when that feature is off.
+    #[cfg_attr(not(feature = "diagnostics"), allow(clippy::unused_enumerate_index))]
     pub(crate) fn new_with_message_cache_max_bytes(
         inputs: &'a [TreeTN<IdxTensor, V>],
         problem: &crate::problem::PreparedTreeProblem<V>,
