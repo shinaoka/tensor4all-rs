@@ -3369,18 +3369,177 @@ scalars (1652 -> 742 input, 816 -> 361 output) with wall time flat within noise
 were already cached. The branched per-call penalty above is what dominates
 there, and it is the open item.
 
+## 2026-09-06 #727 follow-up: the branched evaluator penalty, removed
+
+The section above attributed the unequal incident-bond asymmetry to the Guard
+being invoked at all, and the Guard's cost on a branched tree to
+`TreeTNCachedEvaluator::can_use_raw_messages` refusing the raw kernels for the
+whole tree as soon as one node had more than three neighbours. That refusal is
+now gone, together with the two gaps that forced it.
+
+### Source lookup
+
+Primary sources cloned in full into ignored `target/literature/` and read
+page by page before any of the derivation below:
+
+| source | local clone | SHA-256 (PDF) | pages read |
+|---|---|---|---|
+| Ritter, *Fast elementwise operations on tensor trains with alternating cross interpolation*, [arXiv:2604.00037v2](https://arxiv.org/abs/2604.00037) | `target/literature/aci-2604.00037v2/` (`paper.pdf`, `source.tar.gz`, unpacked TeX) | `1eb0ab6047034d5a4e3155a385d3201df2e36a27412670f0c07f8d8856ff7369` | 1-17 of 17 |
+| Tindall, Stoudenmire and Levy, *Compressing multivariate functions with tree tensor networks*, [arXiv:2410.03572v3](https://arxiv.org/abs/2410.03572) | `target/literature/ttn-2410.03572/` | `18b27a93029842481285290ec58960320a068a6362e5b6a906dc334444a96456` | 1-24 of 24 |
+| Núñez Fernández et al., *Learning tensor networks with tensor cross interpolation*, [arXiv:2407.02454v3](https://arxiv.org/abs/2407.02454) / SciPost Phys. 18, 104 | `target/literature/tci-2407.02454v3/` | `f8d6c5e1dc19350d896f6a4f2bc9c29213d9752b1f45943819d130d2b7379bdf` | reference only, not cited below |
+
+Accessed 2026-09-06. The ACI PDF's hash reproduces the one the #718 session
+recorded, so both sessions read the same v2. What the sources do and do not
+support:
+
+- `Paper` (Tindall et al., v3 p3, Sec. 2, the paragraph immediately after
+  Eq. (1), text anchor "Such a contraction can be done in `O(nL chi^z)` time,
+  where `z` is the maximum co-ordination number of any of the tensors in the
+  network"): contracting a tree tensor network costs `chi^z` in the
+  coordination number `z`. This is the complexity the generalized kernel has
+  to *meet*, and it is why the arithmetic of a high-coordination node cannot
+  be avoided -- only its overhead can. The same scaling is restated for the
+  paper's Fredholm solver on p13 (`O(NnLr(chi_g^z chi_K^z + chi_K^{2z}))`).
+- `Paper` (Ritter v2, p8, Sec. 4, first paragraph of "Conclusions and
+  Outlook", text anchor "it is straightforward to generalize it to
+  tree-shaped tensor networks in the same manner as TCI"): the ACI algorithm
+  this crate implements is stated to generalize to trees, with the tree case
+  referred to Tindall et al. The chain frame recursion the tree message
+  recursion generalizes is Ritter v2 Eqs. (7)-(8) (p4) and Alg. 5 (p13,
+  `LeftFrame`/`RightFrame`).
+- **Not** supported by either paper: any statement about how a branch
+  message should be *implemented* -- axis layout, grouping by physical value,
+  BLAS routing, or a work threshold. Those are
+  `Tree generalization -- re-derived` plus `[AI Supplied]`, and the
+  differential tests against this crate's own generic contraction are their
+  authority.
+
+### What was in the way
+
+Two kernels stopped at coordination three:
+
+1. a rooted message for a node with three or more children had no raw kernel
+   (`try_compute_leaf_message_raw` covers zero, `..._chain_...` one, and
+   `..._branch_...` two), and
+2. `contract_raw_center` hard-coded its nesting for exactly two or three
+   components.
+
+The 2026-08-22 worklog that added the two-child kernel recorded the obstacle
+for the general case: "a general N-child version would need an inter-step
+buffer transpose this 2-child case avoids."
+
+### The derivation that removes the transpose
+
+Prepare the physical slice as `[parent, child_q, ..., child_2, child_1]` in
+column-major order -- parent fastest, the *first* child slowest. Then:
+
+- folding `child_1` is the GEMM over the slice's trailing axis, exactly as in
+  the two-child kernel;
+- what remains per point is `[parent, child_q, ..., child_2]`, whose slowest
+  axis is `child_2`, so folding it reads one contiguous block per coordinate;
+- and so on down to `[parent]`.
+
+Every fold therefore reduces the slowest remaining axis, which is contiguous
+by construction, so no intermediate transpose is needed at any degree. At
+`q = 2` the layout and the fold order are the ones the two-child kernel
+already used, which is why that kernel is left untouched as its own
+specialization. Cost is `parent * prod(child_dims)` per point, i.e. `chi^z` --
+the bound Tindall et al. state for a tree contraction, so the generalization
+is at the paper's complexity and not above it.
+
+`contract_raw_center` is generalized the same way, by replacing its two- and
+three-component `match` with a recursive Horner descent that reproduces the
+same nesting, in the same order, for those two cases.
+
+Two routes are kept for the message kernel: a grouped one that prepares the
+slice and folds the first child with one shared GEMM, and a flat one that
+walks the node's tensor with a strided odometer and allocates nothing beyond
+its output. The flat route runs when the arithmetic is too small to pay for a
+backend call *or* when the prepared slice would exceed
+`MULTI_BRANCH_MAX_PREPARED_ELEMENTS` (4 Mi scalars) -- because the slice is
+`chi^z`, the buffer, unlike the arithmetic, is worth refusing.
+
+### Result
+
+`cached_evaluator::tests::diagnostic_hinted_walk_cost_on_a_chain_versus_a_branched_tree`,
+one hinted two-point Guard-shaped call, 13 sites:
+
+| fixture | before | after | change |
+|---|---|---|---|
+| chain, `chi=8` | 13.8 us/call | 14.1 us/call | unchanged |
+| spider, hub bonds `2,2,2,2` | 292.1 us/call | **12.0 us/call** | 24x |
+| spider, hub bonds `8,8,8,8` | 288.4 us/call | **27.1 us/call** | 10.6x |
+
+The branched cost now *moves with bond dimension* (12.0 vs 27.1 us) instead of
+sitting at a flat ~290 us: what is left is arithmetic, which is the point.
+
+`global_guard::tests::diagnostic_guard_call_cost_on_a_branched_tree`, the same
+walk shape through TreeACI's own Guard evaluators:
+
+| fixture | before | after |
+|---|---|---|
+| 13-site chain, `chi=8` | 19.5 us/call | 20.3 us/call |
+| spider `2,2,2,2` | 391.3 us/call | 18.1 us/call |
+| spider `4,4,4,4` | 385.5 us/call | 19.0 us/call |
+| spider `2,4,8,4` | 386.1 us/call | 18.5 us/call |
+| spider `8,4,2,4` | 388.3 us/call | 18.5 us/call |
+
+A Guard evaluation on a coordination-4 spider now costs what one on a chain of
+the same size costs. End to end on the benchmark's own fixtures
+(`state::tests::profile_unequal_incident_bonds_at_coordination_four`, Guard
+on):
+
+| layout | sweep before | sweep after | guard before | guard after |
+|---|---|---|---|---|
+| `4,4,4,4` | 50.8 ms | 46.9 ms | 0 ns (rank-limited, never searches) | 0 ns |
+| `2,4,8,4` | 470.1 ms | **64.7 ms** | 412.5 ms | **9.4 ms** |
+| `8,4,2,4` | 803.5 ms | **83.0 ms** | 735.2 ms | **18.1 ms** |
+
+Per evaluated point that is `1.22`, `2.54` and `1.22` us against the equal
+layout's `1.22` us, so the `24x` this issue opened with is now at most `2.1x`,
+and what remains is the layouts' different convergence trajectories (sweep
+counts 2, 2 and 4) rather than a per-point penalty.
+
+### Correctness
+
+The kernels are pure performance: every route is checked against the generic
+`compute_stacked_message` contraction it replaces, not against itself.
+
+- `multi_branch_raw_message_matches_generic_contraction`: degrees 3, 4 and 5
+  (hubs of coordination 4, 5, 6), `f64` and `Complex64`, one point and 32
+  points, on a fixture with unequal bonds, unequal site dimensions, and the
+  physical index in the middle of the hub's axis order. Each case asserts
+  which of the two routes it took, and the matrix asserts that both routes
+  were exercised.
+- `multi_branch_grouped_and_flat_routes_agree`: the two routes against each
+  other *and* against a hand-computed reference element, on a spec with a
+  non-contiguous parent axis.
+- `cached_evaluator_matches_tree_evaluate_on_high_coordination_stars` and
+  `raw_center_contraction_covers_high_coordination_centers`: the public
+  `evaluate_batched` against `TreeTN::evaluate` for stars of 4, 5 and 6 arms,
+  centred both at a leaf (the message kernel) and at the hub (the centre
+  kernel), cold and warm.
+- The two eligibility tests that pinned the old boundary are inverted rather
+  than deleted: `degree_four_hub_keeps_raw_messages_when_center_is_a_leaf` now
+  asserts the raw representation is kept, and the degree-four case inside
+  `cached_evaluator_error_paths_and_unsupported_raw_dispatch_are_typed` keeps
+  its value comparison against `TreeTN::evaluate` while asserting the raw
+  path.
+
+Chain behaviour is unchanged by construction -- the zero-, one- and two-child
+kernels and their thresholds are untouched -- and the 13.8 -> 14.1 us chain
+row above is the measurement of that.
+
 ### Open items
 
-1. **DIAGNOSED on 2026-09-06 (#727), one step left.** The unequal-bond
-   asymmetry is a Guard-invocation difference plus a branched-tree evaluation
-   cost, not a cost of unequal bonds: with the Guard disabled the three layouts
-   are within 1.6x per evaluated point, and with it enabled the equal layout is
-   rank-limited and never searches at all. What remains open is the cause of
-   the branched cost -- `TreeTNCachedEvaluator::can_use_raw_messages` refuses
-   the raw kernels for the whole tree as soon as one node has more than three
-   neighbours, which is a fixed ~20x per-call penalty independent of bond
-   dimension. Generalizing those kernels past degree three is the remaining
-   work. See the `#726/#727/#728/#729` section above.
+1. **RESOLVED on 2026-09-06 (#727).** The asymmetry was a Guard-invocation
+   difference plus a branched-tree evaluation cost, not a cost of unequal
+   bonds. Both halves are now measured and the second is fixed: the raw
+   message and centre kernels cover any coordination, a Guard evaluation on a
+   coordination-4 spider costs what a chain of the same size costs, and the
+   fixture's `24x` per evaluated point is down to at most `2.1x`, which is its
+   different convergence trajectory. See the `#727 follow-up` section above.
+
 2. **PARTLY ADDRESSED on 2026-09-06 (#728).** The proposed consolidation of
    random starts into fewer larger calls was measured and rejected (0.21x at
    `chi=256`: a mixed-start batch loses the centre hint). The walk instead

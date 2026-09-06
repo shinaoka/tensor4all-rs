@@ -325,6 +325,19 @@ struct ChainContractionSpec {
 /// point per group (see `grouped_branch_message_contraction`).
 const BRANCH_BLAS_WORK_THRESHOLD: usize = 4096;
 
+/// Largest prepared slice the arbitrary-degree branch kernel will materialize
+/// for one physical group, in scalars.
+///
+/// That slice is `parent_dim * prod(child_dims)`, which grows as `chi^z` in
+/// the node's coordination number `z` -- the same exponent a tree contraction
+/// carries in general (Tindall, Stoudenmire and Levy, arXiv:2410.03572v3,
+/// Sec. 2, the paragraph after Eq. (1): a TTN contraction "can be done in
+/// `O(nL chi^z)` time, where `z` is the maximum co-ordination number"). The
+/// arithmetic is therefore unavoidable for such a node, but *buffering* it is
+/// not, so beyond this size the flat kernel runs instead and allocates
+/// nothing. At 4 Mi scalars this is 32 MiB of `f64` or 64 MiB of `Complex64`.
+const MULTI_BRANCH_MAX_PREPARED_ELEMENTS: usize = 1 << 22;
+
 // [AI Supplied] Test-only A/B seam for independently checking whether the
 // existing generic `contract_with_options` path can replace the specialized
 // raw message kernels without relying on historical worklog claims.
@@ -2375,12 +2388,14 @@ where
         if !neighbors.contains_key(center) {
             return Ok(false);
         }
-        // Every non-center node then has at most two children, which is covered
-        // by the raw branch-message kernel. The center itself is handled by the
-        // degree-1/2/3 raw center kernel.
-        if neighbors.values().any(|neighbors| neighbors.len() > 3) {
-            return Ok(false);
-        }
+        // Coordination is no longer a condition: a non-center node with three
+        // or more children is covered by
+        // `try_compute_multi_branch_message_raw` and the center of any degree
+        // by the raw center kernel. Refusing a single high-coordination node
+        // used to push *every* message of the whole tree onto the generic
+        // `IdxTensor` path, which measured ~20x per hinted evaluation on a
+        // 13-site spider against a chain of the same size, independently of
+        // bond dimension (tensor4all-rs #727).
         if self
             .layout()
             .entries_by_node
@@ -3954,6 +3969,167 @@ where
         Ok(Some(result))
     }
 
+    /// Computes a rooted message for a node with three or more children,
+    /// staying on the raw `Vec<T>` representation.
+    ///
+    /// The zero-, one-, and two-child cases keep their own kernels above;
+    /// this is their arbitrary-degree generalization, and it is what lets
+    /// [`Self::can_use_raw_messages`] admit a tree containing a node of
+    /// coordination four or more at all. Before it existed, one such node
+    /// forced *every* message of the whole tree onto the generic
+    /// `IdxTensor` path.
+    ///
+    /// # Arguments
+    ///
+    /// * `kind` - the scalar kind `T` decodes; a node stored in another kind
+    ///   returns `Ok(None)` so the caller falls back.
+    /// * `decode` - reads one cached scalar as `T`, returning `None` for a
+    ///   cached message of a different kind.
+    ///
+    /// # Returns
+    ///
+    /// `Ok(None)` whenever this node is not eligible (wrong child count,
+    /// several physical indices, a foreign scalar kind, or a child message
+    /// that cannot be read as `T`), which is not an error: the caller then
+    /// uses the generic contraction.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error when the tree is inconsistent with the plan, an
+    /// offset overflows `usize`, or the backend rejects the contraction.
+    #[allow(clippy::too_many_arguments)]
+    fn try_compute_multi_branch_message_raw<T>(
+        &self,
+        node: &V,
+        values: ColMajorArrayRef<'_, usize>,
+        points: &[usize],
+        plan: &RootedMessagePlan<V>,
+        assignment_batches: &HashMap<V, AssignmentBatch>,
+        messages: &HashMap<V, StackedMessage>,
+        kind: ScalarKind,
+        decode: impl Fn(&CachedScalar) -> Option<T> + Copy,
+    ) -> Result<Option<Vec<T>>>
+    where
+        T: TensorElement
+            + BlasMul
+            + Copy
+            + Default
+            + std::ops::AddAssign
+            + std::ops::Mul<Output = T>,
+    {
+        #[cfg(test)]
+        if raw_message_kernels_disabled_for_test() {
+            return Ok(None);
+        }
+        let entries = self
+            .layout()
+            .entries_by_node
+            .get(node)
+            .map(Vec::as_slice)
+            .unwrap_or(&[]);
+        let [entry] = entries else {
+            return Ok(None);
+        };
+        let children = plan.children.get(node).map(Vec::as_slice).unwrap_or(&[]);
+        if children.len() < 3 {
+            return Ok(None);
+        }
+        if plan.parent.get(node).and_then(Clone::clone).is_none() {
+            return Ok(None);
+        }
+
+        let tensor = tensor_for_node(self.tree, node)?;
+        if tensor_scalar_kind(tensor)? != kind {
+            return Ok(None);
+        }
+        let tensor_indices = tensor.indices();
+        if tensor_indices.len() != children.len() + 2 {
+            return Ok(None);
+        }
+        let Some(physical_axis) = tensor_indices.iter().position(|idx| idx == &entry.index) else {
+            return Ok(None);
+        };
+        let mut child_axes = Vec::with_capacity(children.len());
+        for child in children {
+            let Some(edge) = self.tree.edge_between(node, child) else {
+                return Ok(None);
+            };
+            let Some(bond) = self.tree.bond_index(edge) else {
+                return Ok(None);
+            };
+            let Some(axis) = tensor_indices.iter().position(|idx| idx == bond) else {
+                return Ok(None);
+            };
+            child_axes.push(axis);
+        }
+        let Some(parent_axis) = (0..tensor_indices.len())
+            .find(|axis| *axis != physical_axis && !child_axes.contains(axis))
+        else {
+            return Ok(None);
+        };
+
+        let dims = tensor.dims();
+        let mut strides = Vec::with_capacity(dims.len());
+        let mut stride = 1usize;
+        for &dim in &dims {
+            strides.push(stride);
+            stride = stride
+                .checked_mul(dim)
+                .ok_or_else(|| anyhow::anyhow!("multi-branch tensor strides overflow usize"))?;
+        }
+        let spec = MultiBranchContractionSpec {
+            strides,
+            physical_axis,
+            parent_axis,
+            child_dims: child_axes.iter().map(|&axis| dims[axis]).collect(),
+            child_axes,
+            parent_dim: dims[parent_axis],
+        };
+
+        let mut child_columns = Vec::with_capacity(children.len());
+        for (position, child) in children.iter().enumerate() {
+            let message = messages.get(child).ok_or_else(|| {
+                anyhow::anyhow!(
+                    "TreeTNCachedEvaluator::try_compute_multi_branch_message_raw: missing message for child {:?}",
+                    child
+                )
+            })?;
+            let assignment_batch = assignment_batches.get(child).ok_or_else(|| {
+                anyhow::anyhow!(
+                    "TreeTNCachedEvaluator::try_compute_multi_branch_message_raw: missing assignment batch for child {:?}",
+                    child
+                )
+            })?;
+            let Some(columns) = gather_message_columns(
+                message,
+                spec.child_dims[position],
+                points,
+                assignment_batch,
+                decode,
+                "TreeTNCachedEvaluator::try_compute_multi_branch_message_raw child",
+            )?
+            else {
+                return Ok(None);
+            };
+            child_columns.push(columns);
+        }
+
+        let mut physical_values = Vec::with_capacity(points.len());
+        for &point in points {
+            physical_values.push(value_at(
+                values,
+                entry.input_position,
+                point,
+                "TreeTNCachedEvaluator::try_compute_multi_branch_message_raw",
+            )?);
+        }
+
+        let result = tensor.with_dense_slice::<T, _>(|raw| {
+            multi_branch_message_contraction(&spec, raw, &physical_values, &child_columns)
+        })??;
+        Ok(Some(result))
+    }
+
     fn compute_generic_cached_message_values(
         &self,
         node: &V,
@@ -4199,7 +4375,7 @@ where
                         messages,
                     )?
                 };
-                let raw_missing_values = if chain.is_some() {
+                let branch = if chain.is_some() {
                     chain
                 } else {
                     self.try_compute_branch_message_complex_raw(
@@ -4209,6 +4385,23 @@ where
                         plan,
                         assignment_batches,
                         messages,
+                    )?
+                };
+                let raw_missing_values = if branch.is_some() {
+                    branch
+                } else {
+                    self.try_compute_multi_branch_message_raw::<Complex64>(
+                        node,
+                        values,
+                        &missing_points,
+                        plan,
+                        assignment_batches,
+                        messages,
+                        ScalarKind::C64,
+                        |value| match value {
+                            CachedScalar::C64(value) => Some(*value),
+                            _ => None,
+                        },
                     )?
                 };
                 match raw_missing_values {
@@ -4237,7 +4430,7 @@ where
                         messages,
                     )?
                 };
-                let raw_missing_values = if chain.is_some() {
+                let branch = if chain.is_some() {
                     chain
                 } else {
                     self.try_compute_branch_message_raw(
@@ -4247,6 +4440,23 @@ where
                         plan,
                         assignment_batches,
                         messages,
+                    )?
+                };
+                let raw_missing_values = if branch.is_some() {
+                    branch
+                } else {
+                    self.try_compute_multi_branch_message_raw::<f64>(
+                        node,
+                        values,
+                        &missing_points,
+                        plan,
+                        assignment_batches,
+                        messages,
+                        ScalarKind::F64,
+                        |value| match value {
+                            CachedScalar::F64(value) => Some(*value),
+                            _ => None,
+                        },
                     )?
                 };
                 match raw_missing_values {
@@ -4761,7 +4971,7 @@ where
     ) -> Result<Option<Vec<CachedScalar>>> {
         #[cfg(test)]
         let prelude_started = std::time::Instant::now();
-        if !(2..=3).contains(&component_batches.len()) {
+        if component_batches.len() < 2 {
             return Ok(None);
         }
         let entries = self
@@ -5393,6 +5603,32 @@ fn tensor_from_cached_values(
 #[cfg(test)]
 thread_local! {
     static RAW_CENTER_CORE_VISITS: std::cell::Cell<usize> = const { std::cell::Cell::new(0) };
+    /// `(grouped, flat)` calls of the arbitrary-degree branch kernel, so a
+    /// test can pin which route a configuration actually takes. Thread-local
+    /// rather than atomic because the test harness runs tests in parallel
+    /// threads of one process.
+    static MULTI_BRANCH_ROUTES: std::cell::Cell<(usize, usize)> =
+        const { std::cell::Cell::new((0, 0)) };
+}
+
+#[cfg(test)]
+fn record_multi_branch_route(grouped: bool) {
+    let (grouped_calls, flat_calls) = MULTI_BRANCH_ROUTES.get();
+    if grouped {
+        MULTI_BRANCH_ROUTES.set((grouped_calls + 1, flat_calls));
+    } else {
+        MULTI_BRANCH_ROUTES.set((grouped_calls, flat_calls + 1));
+    }
+}
+
+#[cfg(test)]
+fn reset_multi_branch_routes_for_test() {
+    MULTI_BRANCH_ROUTES.set((0, 0));
+}
+
+#[cfg(test)]
+fn multi_branch_routes_for_test() -> (usize, usize) {
+    MULTI_BRANCH_ROUTES.get()
 }
 
 #[cfg(test)]
@@ -5416,8 +5652,8 @@ where
     T: Copy + Default + std::ops::AddAssign + std::ops::Mul<Output = T>,
 {
     ensure!(
-        (2..=3).contains(&components.len()),
-        "raw internal center needs two or three components"
+        components.len() >= 2,
+        "raw internal center needs at least two components"
     );
     ensure!(
         physical_axis < dims.len(),
@@ -5470,10 +5706,6 @@ where
         );
     }
 
-    let component_value = |component: &RawCenterComponent<T>, point: usize, bond: usize| {
-        let assignment = component.point_to_assignment[point];
-        component.values[assignment * component.dim + bond]
-    };
     #[cfg(test)]
     let mut core_visits = 0usize;
     let mut output = Vec::with_capacity(physical_values.len());
@@ -5483,57 +5715,508 @@ where
             "raw center physical value is out of bounds"
         );
         let physical_offset = physical * strides[physical_axis];
-        let mut sum = T::default();
-        match components {
-            [first, second] => {
-                for first_bond in 0..first.dim {
-                    let first_value = component_value(first, point, first_bond);
-                    let mut inner = T::default();
-                    for second_bond in 0..second.dim {
-                        #[cfg(test)]
-                        {
-                            core_visits += 1;
-                        }
-                        let second_value = component_value(second, point, second_bond);
-                        let offset = physical_offset
-                            + first_bond * strides[first.axis]
-                            + second_bond * strides[second.axis];
-                        inner += core[offset] * second_value;
-                    }
-                    sum += inner * first_value;
-                }
-            }
-            [first, second, third] => {
-                for first_bond in 0..first.dim {
-                    let first_value = component_value(first, point, first_bond);
-                    let mut middle = T::default();
-                    for second_bond in 0..second.dim {
-                        let second_value = component_value(second, point, second_bond);
-                        let mut inner = T::default();
-                        for third_bond in 0..third.dim {
-                            #[cfg(test)]
-                            {
-                                core_visits += 1;
-                            }
-                            let third_value = component_value(third, point, third_bond);
-                            let offset = physical_offset
-                                + first_bond * strides[first.axis]
-                                + second_bond * strides[second.axis]
-                                + third_bond * strides[third.axis];
-                            inner += core[offset] * third_value;
-                        }
-                        middle += inner * second_value;
-                    }
-                    sum += middle * first_value;
-                }
-            }
-            _ => bail!("raw internal center needs two or three components"),
-        }
+        let sum = fold_raw_center_components(
+            core,
+            &strides,
+            components,
+            point,
+            0,
+            physical_offset,
+            #[cfg(test)]
+            &mut core_visits,
+        );
         output.push(sum);
     }
     #[cfg(test)]
     RAW_CENTER_CORE_VISITS.set(core_visits);
     Ok(output)
+}
+
+/// Sums one point's center contraction over the components from `level` on.
+///
+/// The descent keeps the nesting the two- and three-component cases used
+/// before it replaced them: each level multiplies its own component value
+/// onto the sum accumulated by the levels inside it, so the arithmetic and
+/// its order are unchanged where those cases still apply, and the same
+/// nesting simply continues for a center of higher coordination. Components
+/// arrive sorted by descending axis, so the innermost loop is the
+/// smallest-stride one.
+fn fold_raw_center_components<T>(
+    core: &[T],
+    strides: &[usize],
+    components: &[RawCenterComponent<T>],
+    point: usize,
+    level: usize,
+    offset: usize,
+    #[cfg(test)] core_visits: &mut usize,
+) -> T
+where
+    T: Copy + Default + std::ops::AddAssign + std::ops::Mul<Output = T>,
+{
+    let component = &components[level];
+    let assignment = component.point_to_assignment[point];
+    let innermost = level + 1 == components.len();
+    let mut sum = T::default();
+    for bond in 0..component.dim {
+        let value = component.values[assignment * component.dim + bond];
+        let offset = offset + bond * strides[component.axis];
+        let inner = if innermost {
+            #[cfg(test)]
+            {
+                *core_visits += 1;
+            }
+            core[offset]
+        } else {
+            fold_raw_center_components(
+                core,
+                strides,
+                components,
+                point,
+                level + 1,
+                offset,
+                #[cfg(test)]
+                core_visits,
+            )
+        };
+        sum += inner * value;
+    }
+    sum
+}
+
+/// One arbitrary-degree branch node's contraction geometry.
+///
+/// The counterpart of [`BranchContractionSpec`] for a node with any number of
+/// rooted children. `child_axes` and `child_dims` are in rooted-child order,
+/// so `child_axes[0]` is the child whose bond the grouped kernel folds with
+/// its shared GEMM and the rest are folded per point afterwards.
+#[derive(Clone, Debug)]
+struct MultiBranchContractionSpec {
+    strides: Vec<usize>,
+    physical_axis: usize,
+    parent_axis: usize,
+    child_axes: Vec<usize>,
+    parent_dim: usize,
+    child_dims: Vec<usize>,
+}
+
+impl MultiBranchContractionSpec {
+    /// Elements of the prepared left operand of one physical group.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error when the product overflows `usize`.
+    fn prepared_elements(&self) -> Result<usize> {
+        self.child_dims
+            .iter()
+            .try_fold(self.parent_dim, |product, &dim| {
+                product
+                    .checked_mul(dim)
+                    .ok_or_else(|| anyhow::anyhow!("multi-branch slice size overflows usize"))
+            })
+    }
+
+    /// Destination weights of the prepared left operand, in child order.
+    ///
+    /// The prepared operand is column-major with `parent` fastest, then the
+    /// children from last to second, and `child_axes[0]` as the trailing
+    /// (column) axis. Folding the children in order therefore always reduces
+    /// the slowest remaining axis, so every step reads a contiguous block and
+    /// no intermediate transpose is needed -- the obstacle that kept the
+    /// two-child kernel from being generalized when it was written (see
+    /// `docs/worklogs/2026-08-22-treetn-branch-message-raw-path.md`).
+    ///
+    /// # Errors
+    ///
+    /// Returns an error when a weight overflows `usize`.
+    fn destination_weights(&self) -> Result<Vec<usize>> {
+        let mut weights = vec![0usize; self.child_dims.len()];
+        let mut weight = self.parent_dim;
+        for (position, &dim) in self.child_dims.iter().enumerate().skip(1).rev() {
+            weights[position] = weight;
+            weight = weight
+                .checked_mul(dim)
+                .ok_or_else(|| anyhow::anyhow!("multi-branch slice weight overflows usize"))?;
+        }
+        // `child_axes[0]` is the GEMM's column axis, so its weight is the row
+        // count of the prepared operand.
+        if let Some(first) = weights.first_mut() {
+            *first = weight;
+        }
+        Ok(weights)
+    }
+}
+
+/// Prepares one physical slice of an arbitrary-degree branch node as the
+/// column-major left operand of the grouped GEMM.
+///
+/// The result has `parent_dim * prod(child_dims[1..])` rows and
+/// `child_dims[0]` columns; see
+/// [`MultiBranchContractionSpec::destination_weights`] for the layout and why
+/// it is the one that makes every later fold contiguous.
+///
+/// # Errors
+///
+/// Returns an error when an offset overflows `usize` or falls outside `raw`.
+fn prepare_multi_branch_slice<T>(
+    spec: &MultiBranchContractionSpec,
+    raw: &[T],
+    physical_value: usize,
+) -> Result<Vec<T>>
+where
+    T: Copy + Default,
+{
+    let length = spec.prepared_elements()?;
+    let weights = spec.destination_weights()?;
+    let mut left = vec![T::default(); length];
+    let physical_base = physical_value
+        .checked_mul(spec.strides[spec.physical_axis])
+        .ok_or_else(|| anyhow::anyhow!("multi-branch tensor offset overflows usize"))?;
+    let parent_stride = spec.strides[spec.parent_axis];
+    let parent_dim = spec.parent_dim;
+    let degree = spec.child_dims.len();
+    let mut coordinates = vec![0usize; degree];
+    loop {
+        let mut source = physical_base;
+        let mut destination = 0usize;
+        for (position, &coordinate) in coordinates.iter().enumerate() {
+            source = coordinate
+                .checked_mul(spec.strides[spec.child_axes[position]])
+                .and_then(|offset| source.checked_add(offset))
+                .ok_or_else(|| anyhow::anyhow!("multi-branch tensor offset overflows usize"))?;
+            destination = coordinate
+                .checked_mul(weights[position])
+                .and_then(|offset| destination.checked_add(offset))
+                .ok_or_else(|| anyhow::anyhow!("multi-branch slice offset overflows usize"))?;
+        }
+        if parent_stride == 1 {
+            let end = source
+                .checked_add(parent_dim)
+                .ok_or_else(|| anyhow::anyhow!("multi-branch tensor offset overflows usize"))?;
+            let block = raw.get(source..end).ok_or_else(|| {
+                anyhow::anyhow!("multi-branch tensor offset {source}..{end} is out of bounds")
+            })?;
+            left[destination..destination + parent_dim].copy_from_slice(block);
+        } else {
+            let mut flat = source;
+            for parent in 0..parent_dim {
+                left[destination + parent] = *raw.get(flat).ok_or_else(|| {
+                    anyhow::anyhow!("multi-branch tensor offset {flat} is out of bounds")
+                })?;
+                flat = flat
+                    .checked_add(parent_stride)
+                    .ok_or_else(|| anyhow::anyhow!("multi-branch tensor offset overflows usize"))?;
+            }
+        }
+
+        // Odometer over the child bonds, least significant last so the walk
+        // covers every combination exactly once.
+        let mut position = degree;
+        loop {
+            if position == 0 {
+                return Ok(left);
+            }
+            position -= 1;
+            coordinates[position] += 1;
+            if coordinates[position] < spec.child_dims[position] {
+                break;
+            }
+            coordinates[position] = 0;
+        }
+    }
+}
+
+/// Folds one point's remaining children into its parent-message column.
+///
+/// `column` enters as the prepared operand's rows for one point, laid out
+/// `[parent, child_{q-1}, ..., child_1]` with `child_1` slowest, and each fold
+/// reduces the slowest remaining axis in place of a transpose.
+///
+/// # Errors
+///
+/// Returns an error when a child's column is missing or the buffer length is
+/// not divisible by the child dimension it is about to fold.
+fn fold_multi_branch_children<T>(
+    spec: &MultiBranchContractionSpec,
+    mut column: Vec<T>,
+    child_columns: &[Vec<T>],
+    point: usize,
+) -> Result<Vec<T>>
+where
+    T: Copy + Default + std::ops::AddAssign + std::ops::Mul<Output = T>,
+{
+    for (position, &dim) in spec.child_dims.iter().enumerate().skip(1) {
+        anyhow::ensure!(
+            dim > 0 && column.len().is_multiple_of(dim),
+            "multi-branch fold buffer of length {} is incompatible with child dimension {dim}",
+            column.len()
+        );
+        let block = column.len() / dim;
+        let values = child_columns.get(position).ok_or_else(|| {
+            anyhow::anyhow!("multi-branch fold is missing child {position}'s columns")
+        })?;
+        let base = point
+            .checked_mul(dim)
+            .ok_or_else(|| anyhow::anyhow!("multi-branch child offset overflows usize"))?;
+        let mut folded = vec![T::default(); block];
+        for coordinate in 0..dim {
+            let value = *values
+                .get(base + coordinate)
+                .ok_or_else(|| anyhow::anyhow!("multi-branch child column is out of bounds"))?;
+            let start = coordinate * block;
+            for (target, source) in folded.iter_mut().zip(&column[start..start + block]) {
+                *target += *source * value;
+            }
+        }
+        column = folded;
+    }
+    Ok(column)
+}
+
+/// Contracts an arbitrary-degree branch node against every child's message
+/// columns without materializing a prepared slice.
+///
+/// This is the memory-flat route: it walks the node's own tensor with a
+/// strided odometer and accumulates directly into each point's parent column,
+/// so its only allocation is the output itself. The grouped route below is
+/// faster per flop but needs a `parent_dim * prod(child_dims)` scratch buffer,
+/// which is why this one stays reachable at every size.
+///
+/// # Errors
+///
+/// Returns an error when a child column list has the wrong length or an
+/// offset leaves `raw`.
+fn scalar_multi_branch_message_contraction<T>(
+    spec: &MultiBranchContractionSpec,
+    raw: &[T],
+    physical_values: &[usize],
+    child_columns: &[Vec<T>],
+) -> Result<Vec<T>>
+where
+    T: Copy + Default + std::ops::AddAssign + std::ops::Mul<Output = T>,
+{
+    let point_count = physical_values.len();
+    let output_len = point_count
+        .checked_mul(spec.parent_dim)
+        .ok_or_else(|| anyhow::anyhow!("multi-branch output length overflows usize"))?;
+    let mut output = vec![T::default(); output_len];
+    let parent_stride = spec.strides[spec.parent_axis];
+    for (point, &physical_value) in physical_values.iter().enumerate() {
+        let physical_base = physical_value
+            .checked_mul(spec.strides[spec.physical_axis])
+            .ok_or_else(|| anyhow::anyhow!("multi-branch tensor offset overflows usize"))?;
+        let destination = point * spec.parent_dim;
+        accumulate_multi_branch_point(
+            spec,
+            raw,
+            child_columns,
+            point,
+            0,
+            physical_base,
+            None,
+            parent_stride,
+            &mut output[destination..destination + spec.parent_dim],
+        )?;
+    }
+    Ok(output)
+}
+
+/// Recursive Horner descent over one point's child bonds.
+///
+/// `weight` is the product of the child values chosen so far, or `None` at the
+/// root so that a childless node copies its slice rather than multiplying by a
+/// synthetic one.
+///
+/// # Errors
+///
+/// Returns an error when an offset overflows `usize` or leaves `raw`.
+#[allow(clippy::too_many_arguments)]
+fn accumulate_multi_branch_point<T>(
+    spec: &MultiBranchContractionSpec,
+    raw: &[T],
+    child_columns: &[Vec<T>],
+    point: usize,
+    level: usize,
+    offset: usize,
+    weight: Option<T>,
+    parent_stride: usize,
+    output: &mut [T],
+) -> Result<()>
+where
+    T: Copy + Default + std::ops::AddAssign + std::ops::Mul<Output = T>,
+{
+    if level == spec.child_dims.len() {
+        let mut flat = offset;
+        for target in output.iter_mut() {
+            let value = *raw.get(flat).ok_or_else(|| {
+                anyhow::anyhow!("multi-branch tensor offset {flat} is out of bounds")
+            })?;
+            match weight {
+                Some(weight) => *target += value * weight,
+                None => *target += value,
+            }
+            flat = flat
+                .checked_add(parent_stride)
+                .ok_or_else(|| anyhow::anyhow!("multi-branch tensor offset overflows usize"))?;
+        }
+        return Ok(());
+    }
+    let dim = spec.child_dims[level];
+    let stride = spec.strides[spec.child_axes[level]];
+    let values = child_columns
+        .get(level)
+        .ok_or_else(|| anyhow::anyhow!("multi-branch contraction is missing child {level}"))?;
+    let base = point
+        .checked_mul(dim)
+        .ok_or_else(|| anyhow::anyhow!("multi-branch child offset overflows usize"))?;
+    for coordinate in 0..dim {
+        let value = *values
+            .get(base + coordinate)
+            .ok_or_else(|| anyhow::anyhow!("multi-branch child column is out of bounds"))?;
+        let next_weight = Some(match weight {
+            Some(weight) => weight * value,
+            None => value,
+        });
+        let next_offset = coordinate
+            .checked_mul(stride)
+            .and_then(|shift| offset.checked_add(shift))
+            .ok_or_else(|| anyhow::anyhow!("multi-branch tensor offset overflows usize"))?;
+        accumulate_multi_branch_point(
+            spec,
+            raw,
+            child_columns,
+            point,
+            level + 1,
+            next_offset,
+            next_weight,
+            parent_stride,
+            output,
+        )?;
+    }
+    Ok(())
+}
+
+/// Contracts an arbitrary-degree branch node one physical group at a time,
+/// folding the first child with a shared GEMM.
+///
+/// Every point in a physical group multiplies the *same* slice of the node's
+/// tensor, so that slice is prepared once and all of the group's first-child
+/// columns are folded into it in a single matrix multiplication. The
+/// remaining children differ per point already after that step, so they are
+/// folded per point by [`fold_multi_branch_children`] -- the same two-stage
+/// shape the two-child kernel uses, generalized by choosing a layout in which
+/// every later fold reduces the slowest remaining axis.
+///
+/// # Errors
+///
+/// Returns an error when a child column list has the wrong length, an offset
+/// leaves `raw`, or the backend rejects the multiplication.
+fn grouped_multi_branch_message_contraction<T>(
+    spec: &MultiBranchContractionSpec,
+    raw: &[T],
+    physical_values: &[usize],
+    child_columns: &[Vec<T>],
+) -> Result<Vec<T>>
+where
+    T: BlasMul + Copy + Default + std::ops::AddAssign + std::ops::Mul<Output = T>,
+{
+    let point_count = physical_values.len();
+    let output_len = point_count
+        .checked_mul(spec.parent_dim)
+        .ok_or_else(|| anyhow::anyhow!("multi-branch output length overflows usize"))?;
+    let first_dim = *spec
+        .child_dims
+        .first()
+        .ok_or_else(|| anyhow::anyhow!("multi-branch grouped kernel needs at least one child"))?;
+    let rows = spec
+        .prepared_elements()?
+        .checked_div(first_dim)
+        .ok_or_else(|| anyhow::anyhow!("multi-branch child dimension must be positive"))?;
+    let mut groups = HashMap::<usize, Vec<usize>>::new();
+    for (point, &physical_value) in physical_values.iter().enumerate() {
+        groups.entry(physical_value).or_default().push(point);
+    }
+    let mut output = vec![T::default(); output_len];
+    let first_columns = child_columns
+        .first()
+        .ok_or_else(|| anyhow::anyhow!("multi-branch grouped kernel needs at least one child"))?;
+    for (physical_value, points) in groups {
+        let left = prepare_multi_branch_slice(spec, raw, physical_value)?;
+        let mut right = Vec::with_capacity(first_dim * points.len());
+        for &point in &points {
+            let start = point
+                .checked_mul(first_dim)
+                .ok_or_else(|| anyhow::anyhow!("multi-branch child offset overflows usize"))?;
+            let end = start
+                .checked_add(first_dim)
+                .ok_or_else(|| anyhow::anyhow!("multi-branch child offset overflows usize"))?;
+            right.extend_from_slice(
+                first_columns
+                    .get(start..end)
+                    .ok_or_else(|| anyhow::anyhow!("multi-branch child column is out of bounds"))?,
+            );
+        }
+        let intermediate = mat_mul_owned(
+            Matrix::from_col_major_vec(rows, first_dim, left),
+            Matrix::from_col_major_vec(first_dim, points.len(), right),
+        )
+        .map_err(anyhow::Error::from)?;
+        let intermediate = intermediate.as_col_major_slice();
+        for (column, &point) in points.iter().enumerate() {
+            let start = column * rows;
+            let folded = fold_multi_branch_children(
+                spec,
+                intermediate[start..start + rows].to_vec(),
+                child_columns,
+                point,
+            )?;
+            anyhow::ensure!(
+                folded.len() == spec.parent_dim,
+                "multi-branch fold produced {} values, expected {}",
+                folded.len(),
+                spec.parent_dim
+            );
+            let destination = point * spec.parent_dim;
+            output[destination..destination + spec.parent_dim].copy_from_slice(&folded);
+        }
+    }
+    Ok(output)
+}
+
+/// Routes one arbitrary-degree branch contraction to the grouped or the flat
+/// kernel.
+///
+/// The grouped kernel is used when the group's arithmetic is large enough to
+/// pay for a backend call *and* its prepared slice fits
+/// [`MULTI_BRANCH_MAX_PREPARED_ELEMENTS`]; a node whose
+/// `parent_dim * prod(child_dims)` cross would need more scratch than that
+/// stays on the flat kernel, which allocates nothing beyond its output. Both
+/// routes compute the same contraction and differ only in the order the sums
+/// are accumulated.
+///
+/// # Errors
+///
+/// Propagates the selected kernel's failures.
+fn multi_branch_message_contraction<T>(
+    spec: &MultiBranchContractionSpec,
+    raw: &[T],
+    physical_values: &[usize],
+    child_columns: &[Vec<T>],
+) -> Result<Vec<T>>
+where
+    T: BlasMul + Copy + Default + std::ops::AddAssign + std::ops::Mul<Output = T>,
+{
+    let prepared = spec.prepared_elements()?;
+    let scalar_work = prepared
+        .checked_mul(physical_values.len())
+        .ok_or_else(|| anyhow::anyhow!("multi-branch work estimate overflows usize"))?;
+    if scalar_work < BRANCH_BLAS_WORK_THRESHOLD || prepared > MULTI_BRANCH_MAX_PREPARED_ELEMENTS {
+        #[cfg(test)]
+        record_multi_branch_route(false);
+        return scalar_multi_branch_message_contraction(spec, raw, physical_values, child_columns);
+    }
+    #[cfg(test)]
+    record_multi_branch_route(true);
+    grouped_multi_branch_message_contraction(spec, raw, physical_values, child_columns)
 }
 
 fn scalar_chain_message_contraction<T>(
@@ -8086,8 +8769,10 @@ mod tests {
             .1
             .remove(&0)
             .unwrap();
-        assert!(hub.tensor.is_some());
-        assert!(hub.raw_values.is_none());
+        // The values above already match the tree's own evaluation; the hub's
+        // three rooted children now reach that answer on the raw path.
+        assert!(hub.raw_values.is_some());
+        assert!(hub.tensor.is_none());
     }
 
     // [AI Supplied] Small exact fixture plumbing around the #671 relation.
@@ -9892,8 +10577,12 @@ mod tests {
         }
     }
 
+    /// A degree-4 hub used to disqualify the whole tree from the raw path,
+    /// because its leaf-rooted form has three children and no kernel covered
+    /// that. `try_compute_multi_branch_message_raw` does, so the tree keeps
+    /// its raw messages (tensor4all-rs #727).
     #[test]
-    fn degree_four_hub_does_not_keep_raw_messages_when_center_is_a_leaf() {
+    fn degree_four_hub_keeps_raw_messages_when_center_is_a_leaf() {
         let (tree, indices) = four_arm_star_tree();
         let mut evaluator = TreeTNCachedEvaluator::new(
             &tree,
@@ -9914,10 +10603,10 @@ mod tests {
             .expect("leaf-centered star must expose the hub environment");
 
         assert!(
-            hub_message.raw_values.is_none(),
-            "a degree-4 hub needs the generic multi-child message path"
+            hub_message.raw_values.is_some(),
+            "a degree-4 hub is covered by the arbitrary-degree message kernel"
         );
-        assert!(hub_message.tensor.is_some());
+        assert!(hub_message.tensor.is_none());
     }
 
     fn complex_star_tree() -> (TreeTN<IdxTensor, usize>, Vec<DynIndex>) {
@@ -10360,6 +11049,367 @@ mod tests {
             values[4 * point + 3] = (point / 5 + offset) % 4;
         }
         values
+    }
+
+    /// A hub of `arms` unequal bonds whose physical index sits *between* two
+    /// of them, with unequal leaf dimensions.
+    ///
+    /// Rooted at leaf 1 the hub has `arms - 1` children, so `arms >= 4`
+    /// reaches the arbitrary-degree message kernel. Nothing about the fixture
+    /// is canonical: axis order, bond dimensions, and site dimensions all
+    /// differ, so a kernel that assumes any of them cannot pass by accident.
+    fn unequal_star_tree<T: CachedEvaluatorTestScalar>(
+        arms: usize,
+    ) -> (TreeTN<IdxTensor, usize>, Vec<DynIndex>) {
+        assert!(arms >= 2, "a star needs at least two arms");
+        let value = |offset: usize| {
+            T::from_parts(
+                (offset % 7) as f64 * 0.25 - 0.75,
+                ((offset % 5) as f64) * 0.125 - 0.25,
+            )
+        };
+        let hub_site = DynIndex::new_dyn(2);
+        let sites = (0..arms)
+            .map(|arm| DynIndex::new_dyn(2 + arm % 2))
+            .collect::<Vec<_>>();
+        // Bonds are large enough that a handful of points already crosses
+        // the grouped kernel's work threshold, so both routes are reachable
+        // through the evaluator rather than only through the primitives.
+        let bonds = (0..arms)
+            .map(|arm| DynIndex::new_dyn(4 + arm % 3))
+            .collect::<Vec<_>>();
+
+        let mut hub_indices = vec![bonds[0].clone(), hub_site.clone()];
+        hub_indices.extend(bonds[1..].iter().cloned());
+        let hub_len = hub_indices
+            .iter()
+            .map(|index| index.dim())
+            .product::<usize>();
+        let hub = IdxTensor::from_dense(hub_indices, (0..hub_len).map(value).collect::<Vec<T>>())
+            .unwrap();
+
+        let mut tensors = vec![hub];
+        for arm in 0..arms {
+            let leaf_len = bonds[arm].dim() * sites[arm].dim();
+            tensors.push(
+                IdxTensor::from_dense(
+                    vec![bonds[arm].clone(), sites[arm].clone()],
+                    (0..leaf_len)
+                        .map(|offset| value(offset + arm + 3))
+                        .collect::<Vec<T>>(),
+                )
+                .unwrap(),
+            );
+        }
+        let tree = TreeTN::<_, usize>::from_tensors(tensors, (0..=arms).collect()).unwrap();
+        let mut indices = vec![hub_site];
+        indices.extend(sites);
+        (tree, indices)
+    }
+
+    /// Distinct points, enumerated as an odometer over the site dimensions so
+    /// that `point_count` distinct assignments really do reach the kernel
+    /// (a cycling pattern repeats after `lcm(dims)` points and would silently
+    /// keep every batch under the grouped kernel's work threshold).
+    fn star_points(indices: &[DynIndex], point_count: usize) -> Vec<usize> {
+        let capacity: usize = indices.iter().map(|index| index.dim()).product();
+        assert!(
+            point_count <= capacity,
+            "the fixture has only {capacity} distinct points"
+        );
+        let mut values = Vec::with_capacity(indices.len() * point_count);
+        for point in 0..point_count {
+            let mut remaining = point;
+            for index in indices {
+                values.push(remaining % index.dim());
+                remaining /= index.dim();
+            }
+        }
+        values
+    }
+
+    /// Returns the `(grouped, flat)` route counts of the kernel call under
+    /// test, so the caller can pin which route this configuration takes
+    /// without counting the warm-up evaluation's own calls.
+    fn assert_multi_branch_matches_generic<T>(arms: usize, point_count: usize) -> (usize, usize)
+    where
+        T: CachedEvaluatorTestScalar
+            + BlasMul
+            + Copy
+            + Default
+            + std::ops::AddAssign
+            + std::ops::Mul<Output = T>,
+    {
+        let (tree, indices) = unequal_star_tree::<T>(arms);
+        let mut evaluator = TreeTNCachedEvaluator::new(
+            &tree,
+            &indices,
+            CachedEvaluatorOptions {
+                center: Some(1),
+                ..Default::default()
+            },
+        )
+        .unwrap();
+        let values = star_points(&indices, point_count);
+        let shape = [indices.len(), point_count];
+        let points = ColMajorArrayRef::new(&values, &shape).unwrap();
+        evaluator.evaluate_batched(points).unwrap();
+
+        let plan = RootedMessagePlan::new(&tree, &1).unwrap();
+        let assignment_batches = evaluator
+            .build_message_assignment_batches(&plan, points)
+            .unwrap();
+
+        // Every leaf except the centre is a child of the hub; compute those
+        // through the generic oracle so only the hub's own step differs.
+        let mut messages = HashMap::new();
+        for leaf in 2..=arms {
+            let leaf_points = assignment_batches.get(&leaf).unwrap().first_points.clone();
+            let leaf_message = evaluator
+                .compute_stacked_message(
+                    &leaf,
+                    points,
+                    &leaf_points,
+                    &plan,
+                    &assignment_batches,
+                    &HashMap::new(),
+                )
+                .unwrap();
+            messages.insert(leaf, leaf_message);
+        }
+        assert_eq!(
+            plan.children.get(&0).map(Vec::len),
+            Some(arms - 1),
+            "the hub must have every non-centre arm as a rooted child"
+        );
+
+        let hub_points = assignment_batches.get(&0).unwrap().first_points.clone();
+        let expected_message = evaluator
+            .compute_stacked_message(
+                &0,
+                points,
+                &hub_points,
+                &plan,
+                &assignment_batches,
+                &messages,
+            )
+            .unwrap();
+        let expected = tensor_values_any(expected_message.tensor.as_ref().unwrap()).unwrap();
+
+        reset_multi_branch_routes_for_test();
+        let actual = evaluator
+            .try_compute_multi_branch_message_raw::<T>(
+                &0,
+                points,
+                &hub_points,
+                &plan,
+                &assignment_batches,
+                &messages,
+                if T::IS_COMPLEX {
+                    ScalarKind::C64
+                } else {
+                    ScalarKind::F64
+                },
+                |value| match (value, T::IS_COMPLEX) {
+                    (CachedScalar::F64(value), false) => Some(T::from_parts(*value, 0.0)),
+                    (CachedScalar::C64(value), true) => Some(T::from_parts(value.re, value.im)),
+                    _ => None,
+                },
+            )
+            .unwrap()
+            .unwrap_or_else(|| panic!("a hub with {} rooted children must be eligible", arms - 1));
+
+        assert_eq!(actual.len(), expected.len());
+        let mut residual = 0.0f64;
+        for (raw, generic) in actual.iter().zip(expected.iter()) {
+            let raw = raw.into_any_scalar();
+            residual = residual
+                .max((raw.real() - generic.real()).abs())
+                .max((raw.imag() - generic.imag()).abs());
+        }
+        assert!(
+            residual <= 1.0e-10,
+            "arbitrary-degree message differs from the generic contraction by {residual:.3e} \
+             (arms={arms}, points={point_count})"
+        );
+        multi_branch_routes_for_test()
+    }
+
+    /// The arbitrary-degree message kernel must reproduce the generic
+    /// contraction at every degree it claims, for both scalar kinds, and on
+    /// both of its routes.
+    ///
+    /// The route a case takes follows from its own arithmetic -- the grouped
+    /// kernel is chosen when `parent_dim * prod(child_dims) * points` clears
+    /// the backend threshold -- so rather than restate that rule per case,
+    /// the matrix asserts that each call took exactly one route and that the
+    /// matrix as a whole exercised both.
+    #[test]
+    fn multi_branch_raw_message_matches_generic_contraction() {
+        let mut grouped_total = 0usize;
+        let mut flat_total = 0usize;
+        for arms in [4usize, 5, 6] {
+            for point_count in [1usize, 32] {
+                for complex in [false, true] {
+                    let (grouped, flat) = if complex {
+                        assert_multi_branch_matches_generic::<Complex64>(arms, point_count)
+                    } else {
+                        assert_multi_branch_matches_generic::<f64>(arms, point_count)
+                    };
+                    assert_eq!(
+                        grouped + flat,
+                        1,
+                        "arms={arms} points={point_count} complex={complex} took {grouped} grouped \
+                         and {flat} flat routes"
+                    );
+                    grouped_total += grouped;
+                    flat_total += flat;
+                }
+            }
+        }
+        assert!(
+            grouped_total > 0 && flat_total > 0,
+            "the matrix must exercise both routes, saw {grouped_total} grouped and {flat_total} flat"
+        );
+    }
+
+    /// The two routes of the arbitrary-degree kernel are the same
+    /// contraction, so they must agree with each other as well as with the
+    /// generic path -- the fallback-parity half of the routing contract.
+    #[test]
+    fn multi_branch_grouped_and_flat_routes_agree() {
+        // A hub of shape [parent=3, physical=2, c0=2, c1=3, c2=2] with the
+        // physical axis in the middle and a non-contiguous parent axis.
+        let spec = MultiBranchContractionSpec {
+            strides: vec![1, 3, 6, 12, 36],
+            physical_axis: 1,
+            parent_axis: 0,
+            child_axes: vec![2, 3, 4],
+            parent_dim: 3,
+            child_dims: vec![2, 3, 2],
+        };
+        let raw = (0..72)
+            .map(|value| (value % 11) as f64 * 0.25 - 1.0)
+            .collect::<Vec<f64>>();
+        let physical_values = vec![0usize, 1, 1, 0];
+        let child_columns = vec![
+            (0..8)
+                .map(|v| (v % 5) as f64 * 0.5 - 0.75)
+                .collect::<Vec<f64>>(),
+            (0..12)
+                .map(|v| (v % 7) as f64 * 0.25 - 0.5)
+                .collect::<Vec<f64>>(),
+            (0..8)
+                .map(|v| (v % 3) as f64 * 0.75 - 0.25)
+                .collect::<Vec<f64>>(),
+        ];
+
+        let flat =
+            scalar_multi_branch_message_contraction(&spec, &raw, &physical_values, &child_columns)
+                .unwrap();
+        let grouped =
+            grouped_multi_branch_message_contraction(&spec, &raw, &physical_values, &child_columns)
+                .unwrap();
+
+        assert_eq!(flat.len(), physical_values.len() * spec.parent_dim);
+        assert_eq!(flat.len(), grouped.len());
+        let residual = flat
+            .iter()
+            .zip(&grouped)
+            .fold(0.0f64, |residual, (left, right)| {
+                residual.max((left - right).abs())
+            });
+        assert!(
+            residual <= 1.0e-12,
+            "the grouped and flat routes disagree by {residual:.3e}"
+        );
+
+        // A hand-computed reference for one output element pins the two
+        // routes to the intended contraction rather than to each other:
+        // point 0 has physical 0 and reads child columns 0..d of each child.
+        let mut reference = 0.0f64;
+        for c0 in 0..spec.child_dims[0] {
+            for c1 in 0..spec.child_dims[1] {
+                for c2 in 0..spec.child_dims[2] {
+                    // Point 0 has physical value 0, so its physical
+                    // offset contributes nothing to this reference.
+                    let offset = c0 * spec.strides[spec.child_axes[0]]
+                        + c1 * spec.strides[spec.child_axes[1]]
+                        + c2 * spec.strides[spec.child_axes[2]]
+                        + 2 * spec.strides[spec.parent_axis];
+                    reference += raw[offset]
+                        * child_columns[0][c0]
+                        * child_columns[1][c1]
+                        * child_columns[2][c2];
+                }
+            }
+        }
+        assert!(
+            (flat[2] - reference).abs() <= 1.0e-12,
+            "flat route gives {} against the hand-computed {reference}",
+            flat[2]
+        );
+    }
+
+    /// The whole public evaluation must match the tree's own contraction on a
+    /// high-coordination star, with the centre both at a leaf (which
+    /// exercises the arbitrary-degree *message* kernel) and at the hub (which
+    /// exercises the arbitrary-degree *centre* contraction).
+    #[test]
+    fn cached_evaluator_matches_tree_evaluate_on_high_coordination_stars() {
+        for arms in [4usize, 5, 6] {
+            let (tree, indices) = unequal_star_tree::<f64>(arms);
+            let values = star_points(&indices, 5);
+            let shape = [indices.len(), 5];
+            let points = ColMajorArrayRef::new(&values, &shape).unwrap();
+            let expected = tree.evaluate(&indices, points).unwrap();
+
+            for center in [1usize, 0] {
+                let mut evaluator = TreeTNCachedEvaluator::new(
+                    &tree,
+                    &indices,
+                    CachedEvaluatorOptions {
+                        center: Some(center),
+                        ..Default::default()
+                    },
+                )
+                .unwrap();
+                let cold = evaluator.evaluate_batched(points).unwrap();
+                let warm = evaluator.evaluate_batched(points).unwrap();
+                assert_scalars_close(&cold, &expected);
+                assert_scalars_close(&warm, &expected);
+            }
+        }
+    }
+
+    /// A centre of coordination four or more is contracted by the same raw
+    /// centre kernel that used to stop at three components.
+    #[test]
+    fn raw_center_contraction_covers_high_coordination_centers() {
+        for arms in [4usize, 5] {
+            let (tree, indices) = unequal_star_tree::<f64>(arms);
+            let values = star_points(&indices, 3);
+            let shape = [indices.len(), 3];
+            let points = ColMajorArrayRef::new(&values, &shape).unwrap();
+            let expected = tree.evaluate(&indices, points).unwrap();
+            let mut evaluator = TreeTNCachedEvaluator::new(
+                &tree,
+                &indices,
+                CachedEvaluatorOptions {
+                    center: Some(0),
+                    ..Default::default()
+                },
+            )
+            .unwrap();
+
+            reset_raw_center_core_visits_for_test();
+            let actual = evaluator.evaluate_batched(points).unwrap();
+            assert_scalars_close(&actual, &expected);
+            assert!(
+                raw_center_core_visits_for_test() > 0,
+                "a degree-{arms} centre must reach the raw centre kernel"
+            );
+        }
     }
 
     fn four_arm_star_tree() -> (TreeTN<IdxTensor, usize>, Vec<DynIndex>) {
